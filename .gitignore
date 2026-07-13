@@ -1,0 +1,36 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Virtual envs ---
+.venv/
+venv/
+env/
+
+# --- Environment / secrets ---
+.env
+.env.local
+*.pem
+*.key
+
+# --- Project-specific ---
+reports/*
+!reports/.gitkeep
+*.log
+
+# --- IDE ---
+.vscode/
+.idea/
+*.swp
+.DS_Store
