@@ -29,6 +29,9 @@ reports/*
 !reports/.gitkeep
 *.log
 
+# --- Personal notes, never pushed ---
+.local/
+
 # --- IDE ---
 .vscode/
 .idea/
