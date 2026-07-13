@@ -1,5 +1,5 @@
 [project]
-name = "consulting-agent"
+name = "agentic-analyst"
 version = "0.1.0"
 description = "Multi-agent system for business research briefs"
 readme = "README.md"
@@ -9,13 +9,14 @@ authors = [
 requires-python = ">=3.13"
 dependencies = [
     "langchain-google-genai>=4.2.7",
+    "langgraph>=0.2.0",
     "pydantic>=2.13.4",
     "pydantic-settings>=2.14.2",
     "python-dotenv>=1.2.2",
 ]
 
 [project.scripts]
-consulting-agent = "consulting_agent:main"
+agentic-analyst = "agentic_analyst:main"
 
 [build-system]
 requires = ["uv_build>=0.11.28,<0.12.0"]
@@ -24,7 +25,7 @@ build-backend = "uv_build"
 # --- Ruff (linter + formatter) ---
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py313"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "SIM"]
@@ -35,7 +36,7 @@ quote-style = "double"
 
 # --- Mypy (type checker) ---
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.13"
 strict = true
 warn_unused_ignores = true
 warn_return_any = true
