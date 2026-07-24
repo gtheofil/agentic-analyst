@@ -8,6 +8,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      GOOGLE_API_KEY: "test-key-not-real" 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
