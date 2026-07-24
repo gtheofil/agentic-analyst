@@ -77,6 +77,8 @@ def _raw_generate(
     (5xx / timeouts) are retried in exactly one place. Retries 3x with
     exponential backoff; ClientError (4xx) is NOT retryable and bubbles up.
     """
+    if SETTINGS.google_api_key is None:
+        raise RuntimeError("GOOGLE_API_KEY is not set. Add it to your .env or environment.")
     return client.models.generate_content(
         model=model_id,
         contents=contents,

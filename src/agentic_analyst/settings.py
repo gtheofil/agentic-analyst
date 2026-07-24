@@ -1,4 +1,3 @@
-from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # ── Constants (not environment-loaded) ──────────────────────
@@ -15,7 +14,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    google_api_key: str = Field(..., description="Gemini API key from AI Studio")
+    google_api_key: str | None = None  # optional -> import never fails
 
 
-SETTINGS = Settings()  # type: ignore[call-arg]
+SETTINGS = Settings()
