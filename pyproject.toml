@@ -8,7 +8,9 @@ authors = [
 ]
 requires-python = ">=3.13"
 dependencies = [
-    "langchain-google-genai>=4.2.7",
+    "google-genai>=2.14.0",
+    "httpx>=0.28.1",
+    "langchain-core>=1.4.9",
     "langgraph>=0.2.0",
     "pydantic>=2.13.4",
     "pydantic-settings>=2.14.2",
@@ -17,14 +19,11 @@ dependencies = [
 ]
 
 [project.scripts]
-agentic-analyst = "agentic_analyst:main"
+agentic-analyst = "agentic_analyst.run:main"
 
 [build-system]
 requires = ["uv_build>=0.11.28,<0.12.0"]
 build-backend = "uv_build"
-
-[tool.setuptools.packages.find]
-where = ["src"]
 
 # --- Ruff (linter + formatter) ---
 [tool.ruff]

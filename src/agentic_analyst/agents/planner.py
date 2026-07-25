@@ -1,37 +1,49 @@
-from pathlib import Path
+"""Planner node: brief in, list of research tasks out."""
+
+import logging
+from typing import Any
 
 from pydantic import BaseModel
 
-from ..llm import call
+from ..llm import RUN_METER, call
+from ..settings import PROMPTS_DIR
 from ..state import AgentState, Task
 
-# Walk up from src/agents/planner.py -> src/agents -> agentic_analyst
-# -> src -> repo root -> prompts/
-_PROMPT_PATH = Path(__file__).resolve().parent.parent.parent.parent / "prompts" / "planner.md"
+log = logging.getLogger(__name__)
+
+_PROMPT_PATH = PROMPTS_DIR / "planner.md"
 
 
 class Plan(BaseModel):
-    """Wrapper so `llm.call` can return a structured list of tasks."""
+    """Wrapper so `llm.call` can return a structured list of tasks.
+
+    Gemini's structured output needs an object at the top level, not a bare
+    array, so the tasks are nested one level down.
+    """
 
     tasks: list[Task]
 
 
-def planner(state: AgentState) -> dict[str, list[Task]]:
+def planner(state: AgentState) -> dict[str, Any]:
     """Decompose the brief in `state` into a list of research tasks.
 
     Reads:  state["brief"]
-    Writes: state["plan"]
+    Writes: state["plan"], state["cost_usd"]
     """
     system_prompt = _PROMPT_PATH.read_text(encoding="utf-8")
 
-    result = call(
-        tier="sonnet",
-        system=system_prompt,
-        user=state["brief"],
-        schema=Plan,
-    )
+    with RUN_METER.track() as spend:
+        # `call` is overloaded: passing schema=Plan makes the return type Plan,
+        # so no isinstance check is needed to satisfy the type checker.
+        result = call(
+            tier="fast",
+            system=system_prompt,
+            user=state["brief"],
+            schema=Plan,
+        )
 
-    # `call` returns `str | BaseModel`; with schema=Plan it will be a Plan.
-    assert isinstance(result, Plan), "planner expected structured Plan output"
+    log.info("planner produced %d tasks (cost $%.6f)", len(result.tasks), spend.usd)
+    for task in result.tasks:
+        log.info("  task %d: %s", task.id, task.goal)
 
-    return {"plan": result.tasks}
+    return {"plan": result.tasks, "cost_usd": spend.usd}

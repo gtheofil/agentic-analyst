@@ -1,28 +1,51 @@
-from pathlib import Path
+"""Writer node: plan in, markdown report out.
 
-from ..llm import call
-from ..state import AgentState
+Phase 1 has no researcher yet, so there are no findings to cite. The writer
+still emits citation tags — every claim gets `[unverified]` — so the citation
+convention and the Saturday hard-check regex are settled now rather than
+retrofitted later.
+"""
 
-_PROMPT_PATH = Path(__file__).resolve().parent.parent.parent.parent / "prompts" / "writer.md"
+import logging
+from typing import Any
+
+from ..llm import RUN_METER, call
+from ..settings import PROMPTS_DIR
+from ..state import AgentState, Task
+
+log = logging.getLogger(__name__)
+
+_PROMPT_PATH = PROMPTS_DIR / "writer.md"
 
 
-def writer(state: AgentState) -> dict[str, str]:
+def _format_plan(plan: list[Task]) -> str:
+    """Render the typed plan as the plain text the prompt expects."""
+    lines = []
+    for task in plan:
+        line = f"{task.id}. {task.goal}"
+        if task.depends_on:
+            line += f" (depends on {task.depends_on})"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def writer(state: AgentState) -> dict[str, Any]:
+    """Turn the plan into a markdown draft.
+
+    Reads:  state["brief"], state["memory_context"], state["plan"]
+    Writes: state["draft"], state["cost_usd"]
+    """
     system_prompt = _PROMPT_PATH.read_text(encoding="utf-8")
 
-    brief = state["brief"]
-    memory_context = state["memory_context"]
-    plan = state["plan"]
-
-    # Turn list[Task] into plain text for the prompt
-    plain_text = "\n".join(
-        f"{task.id}.{task.goal}" + (f"(depends on {task.depends_on})" if task.depends_on else "")
-        for task in plan
+    user_prompt = (
+        f"Brief:\n{state['brief']}\n\n"
+        f"Background:\n{state['memory_context']}\n\n"
+        f"Plan:\n{_format_plan(state['plan'])}\n"
     )
 
-    draft = call(
-        tier="sonnet",
-        system=system_prompt,
-        user=(f"Brief:\n{brief}\n\nBackground:\n{memory_context}\n\nPlan:\n{plain_text}\n\n"),
-    )
-    assert isinstance(draft, str)
-    return {"draft": draft}
+    with RUN_METER.track() as spend:
+        draft = call(tier="fast", system=system_prompt, user=user_prompt)
+
+    log.info("writer produced %d chars (cost $%.6f)", len(draft), spend.usd)
+
+    return {"draft": draft, "cost_usd": spend.usd}

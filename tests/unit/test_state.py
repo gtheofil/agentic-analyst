@@ -1,5 +1,6 @@
-# tests/test_state.py
-"""Unit tests for the typed contracts in src/state.py."""
+"""Unit tests for the typed contracts in state.py."""
+
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -8,8 +9,8 @@ from agentic_analyst.state import AgentState, Critique, Finding, Task
 
 
 # ---------- Finding ----------
-def test_finding_rejects_missing_source_url():
-    incorrect = {
+def test_finding_rejects_missing_source_url() -> None:
+    incorrect: dict[str, Any] = {
         "task_id": 1,
         "claim": "The sky is blue.",
         "quote": "The sky appears blue.",
@@ -22,8 +23,8 @@ def test_finding_rejects_missing_source_url():
 
 # ---------- Critique ----------
 @pytest.mark.parametrize("value", [1, 5, 10])
-def test_critique_score_accepts_valid_range(value):
-    correct = {
+def test_critique_score_accepts_valid_range(value: int) -> None:
+    correct: dict[str, Any] = {
         "score": value,
         "passed": True,
         "weakest_claim": "The sky is blue",
@@ -33,8 +34,8 @@ def test_critique_score_accepts_valid_range(value):
 
 
 @pytest.mark.parametrize("value", [0, 11, -1, 100])
-def test_critique_score_rejects_out_of_range(value):
-    wrong = {
+def test_critique_score_rejects_out_of_range(value: int) -> None:
+    wrong: dict[str, Any] = {
         "score": value,
         "passed": True,
         "weakest_claim": "The sky is blue",
@@ -45,7 +46,7 @@ def test_critique_score_rejects_out_of_range(value):
 
 
 # ---------- AgentState ----------
-def test_agent_state_accepts_well_formed_dict():
+def test_agent_state_accepts_well_formed_dict() -> None:
     task = Task(id=1, goal="define meal-kit market size", depends_on=[])
 
     finding = Finding(

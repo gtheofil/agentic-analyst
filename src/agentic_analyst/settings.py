@@ -1,9 +1,30 @@
+"""Configuration: everything environment-dependent or model-dependent lives here.
+
+Nothing else in the codebase reads `os.environ` directly, and nothing else
+hardcodes a model ID. When the provider changes, this file changes and the
+agents do not.
+"""
+
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# ── Constants (not environment-loaded) ──────────────────────
+# ── Paths ───────────────────────────────────────────────────
+# settings.py lives at <repo>/src/agentic_analyst/settings.py, so parents[2]
+# is the repo root. Resolved once here so no other module has to count
+# directories back up the tree.
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROMPTS_DIR = PROJECT_ROOT / "prompts"
+
+MODEL_TIERS: dict[str, str] = {
+    "strong": "gemini-3.6-flash",
+    "fast": "gemini-3.5-flash-lite",
+}
+
 PRICES: dict[str, dict[str, float]] = {
+    "gemini-3.6-flash": {"input": 1.50, "output": 7.50},
+    "gemini-3.5-flash-lite": {"input": 0.30, "output": 2.50},
     "gemini-2.5-pro": {"input": 1.25, "output": 10.00},
-    "gemini-2.5-flash": {"input": 0.30, "output": 2.50},
 }
 
 
@@ -14,7 +35,10 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    google_api_key: str | None = None  # optional -> import never fails
+    # Optional on purpose: the package must import, lint, type-check and run its
+    # mocked test suite with no key present. The key is only required at the
+    # moment a real API call is made — see `llm._get_client`.
+    google_api_key: str | None = None
 
 
 SETTINGS = Settings()

@@ -22,10 +22,10 @@ pytestmark = [
 
 
 # ── Test 1: plain text mode (no schema) ─────────────────────
-def test_call_returns_text_when_no_schema():
+def test_call_returns_text_when_no_schema() -> None:
     """When schema is None, call() should return a plain string."""
     result = call(
-        tier="haiku",
+        tier="fast",
         system="You are terse. Respond in exactly one word.",
         user="Say 'hello'.",
     )
@@ -42,10 +42,10 @@ class ColorPick(BaseModel):
     reason: str
 
 
-def test_call_returns_pydantic_instance_when_schema_given():
+def test_call_returns_pydantic_instance_when_schema_given() -> None:
     """When a schema is passed, call() should return a validated instance."""
     result = call(
-        tier="haiku",
+        tier="fast",
         system="You pick colours. Reply strictly in the requested JSON shape.",
         user="Pick a colour that suits a coffee shop. Give a one-sentence reason.",
         schema=ColorPick,
