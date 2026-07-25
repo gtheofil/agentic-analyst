@@ -1,2 +1,1 @@
-def main() -> None:
-    print("Hello from agentic-analyst!")
+"""Multi-agent system for business research briefs."""
