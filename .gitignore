@@ -27,6 +27,7 @@ env/
 # --- Project-specific ---
 reports/*
 !reports/.gitkeep
+runs/
 *.log
 
 # --- Personal notes, never pushed ---

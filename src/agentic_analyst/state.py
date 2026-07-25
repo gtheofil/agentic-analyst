@@ -9,7 +9,8 @@ retry rather than a crash three nodes later.
 Each node reads some of its fields and writes others.
 """
 
-from typing import Literal, TypedDict
+import operator
+from typing import Annotated, Literal, TypedDict
 
 from pydantic import BaseModel, Field
 
@@ -58,6 +59,12 @@ class AgentState(TypedDict):
 
     `critique` is None until the critic has run; `revision_count` guards the
     writer<->critic loop so it is guaranteed to terminate.
+
+    Note `cost_usd`: by default a node returning a key *overwrites* it, so if
+    each node reported its own spend the last node would erase the rest. The
+    `Annotated[..., operator.add]` marker is a LangGraph **reducer** — it tells
+    the graph to combine the old and new values with `+` instead of replacing.
+    Nodes therefore return their own cost and the graph sums it.
     """
 
     brief: str
@@ -67,4 +74,4 @@ class AgentState(TypedDict):
     draft: str
     critique: Critique | None
     revision_count: int
-    cost_usd: float
+    cost_usd: Annotated[float, operator.add]
