@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     # mocked test suite with no key present. The key is only required at the
     # moment a real API call is made — see `llm._get_client`.
     google_api_key: str | None = None
+    tavily_api_key: str | None = None
 
 
 SETTINGS = Settings()
