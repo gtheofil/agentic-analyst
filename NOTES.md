@@ -279,6 +279,52 @@ ask what one revision is.
 
 ---
 
+## 11. The dashboard said the run was free
+
+**Symptom.** First fully traced run. The trace was perfect: 33 generations, all
+8 graph nodes nested under one root, every prompt and completion captured,
+token counts exactly matching the terminal. And the cost read **$0.00** — on
+the trace, and on every single generation — while the CLI printed $0.047414.
+
+**Diagnosis.** Langfuse takes `usage_details` and `cost_details` as
+dictionaries of mutually exclusive buckets. For **usage** it derives the total
+by summing the buckets; `{"input": 1449, "output": 40, "thinking": 0}` came
+back with `total: 1489` filled in. For **cost** it does not. No error, no
+warning, no hint in the response — the buckets were stored verbatim and
+`calculatedTotalCost` stayed at zero.
+
+Confirmed with a two-generation probe rather than another paid run: identical
+payloads, one with an explicit `total`, one without.
+
+```
+A-no-total     calcTotalCost=0          costDetails={input, output, thinking}
+B-with-total   calcTotalCost=0.000675   costDetails={input, output, thinking, total}
+```
+
+**The fix** sends `total` explicitly, and sends the value the meter just booked
+rather than recomputing it. The dashboard total and the terminal total are now
+the same number by construction: a second run reconciles at $0.056164 across 37
+calls on both sides.
+
+**The interesting part.** Two things, and the second one nearly got me.
+
+First, the failure mode. Nothing threw. The instrumentation I would have
+checked — is the trace there, are the nodes nested, are the tokens right — was
+all green. The one number the whole exercise was *for* was silently zero, and
+the only way to notice was to compare it against a number I already had.
+Tracing that reports nothing looks identical to tracing that reports nothing
+wrong.
+
+Second: when I first read the fixed run back through the API, it showed 33 of
+37 generations, 2 of 8 nodes, and an empty trace name. That looks exactly like
+dropped spans — a real, plausible bug in my own flushing. It was ingestion lag.
+Polling until the observation count stopped changing turned "my spans are being
+dropped" into "I read too early." **Verifying against an eventually-consistent
+system too quickly manufactures bugs that do not exist**, and I would have
+happily spent an hour fixing that one.
+
+---
+
 ## Recurring themes (the short version for an interview)
 
 1. **Prompts are requests; code is guarantees.** Anything that must be true —
@@ -304,3 +350,7 @@ ask what one revision is.
 8. **A written-up lesson is not a control.** I documented #6 and reintroduced it
    in the next node I wrote. What stopped it recurring was deleting the
    hand-maintained list, not describing why it was dangerous.
+9. **The absence of an error is not evidence of success.** #11's cost was zero
+   with everything green. The check that caught it was comparing a new number
+   against one I already trusted — which is only possible because the meter
+   existed first.

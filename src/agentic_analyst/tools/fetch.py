@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import httpx
 import trafilatura
+from langfuse import observe
 from pydantic import BaseModel, Field
 
 _TIMEOUT = 10.0
@@ -22,6 +23,7 @@ class FetchError(RuntimeError):
     """Raised when a page can't be fetched or turned into clean text."""
 
 
+@observe(name="fetch", as_type="tool")
 def fetch(args: FetchArgs) -> FetchResult:
     """Download a page and return its main text (boilerplate stripped)."""
     html = _download(args.url)
