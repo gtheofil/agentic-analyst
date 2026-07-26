@@ -10,7 +10,7 @@ Each node reads some of its fields and writes others.
 """
 
 import operator
-from typing import Annotated, Literal, TypedDict
+from typing import Annotated, ClassVar, Literal, TypedDict
 
 from pydantic import BaseModel, Field
 
@@ -41,17 +41,65 @@ class Finding(BaseModel):
     confidence: Literal["high", "medium", "low"]
 
 
+class Fix(BaseModel):
+    """One concrete problem the critic wants corrected.
+
+    Severity is a separate field rather than a prefix in the text because the
+    pass rule keys off it: a single `critical` fix blocks a draft no matter how
+    well it scored. Something the router branches on cannot live inside prose.
+    """
+
+    severity: Literal["critical", "major", "minor"]
+    issue: str  # what is wrong
+    location: str  # where — the section, claim or citation it applies to
+    suggestion: str  # what to do about it
+
+
+class Scores(BaseModel):
+    """The three rubric dimensions, scored 0-10 against the anchors in critic.md.
+
+    Kept as separate fields, not one overall number, because the pass rule is
+    defined on their mean — and because "groundedness 3, structure 9" is
+    actionable feedback where "6/10" is not.
+    """
+
+    groundedness: int = Field(ge=0, le=10)
+    structure: int = Field(ge=0, le=10)
+    actionability: int = Field(ge=0, le=10)
+
+    @property
+    def mean(self) -> float:
+        return (self.groundedness + self.structure + self.actionability) / 3
+
+
 class Critique(BaseModel):
     """The critic's verdict on a draft.
 
     `weakest_claim` is mandatory on purpose: forcing the critic to name the
     single weakest claim stops it from rubber-stamping drafts.
+
+    Note what is *not* here: a `passed` field. Whether a draft ships is the
+    graph's decision, not the model's, so `passed` is a computed property over
+    the scores and fixes rather than a boolean the critic reports about itself.
+    A model that likes its own work can still say 9/10 — it cannot also say
+    "and therefore ship it". Plain `@property`, not `computed_field`, so it
+    stays out of the JSON schema the model is asked to fill.
     """
 
-    score: int = Field(ge=1, le=10)  # anchored 1-10 rubric
-    passed: bool
+    scores: Scores
     weakest_claim: str
-    required_fixes: list[str] = Field(default_factory=list)
+    required_fixes: list[Fix] = Field(default_factory=list)
+
+    PASS_MEAN: ClassVar[float] = 7.0
+
+    @property
+    def critical_fixes(self) -> list[Fix]:
+        return [f for f in self.required_fixes if f.severity == "critical"]
+
+    @property
+    def passed(self) -> bool:
+        """Mean of the three dimensions >= 7 AND no critical fixes."""
+        return self.scores.mean >= self.PASS_MEAN and not self.critical_fixes
 
 
 class AgentState(TypedDict):

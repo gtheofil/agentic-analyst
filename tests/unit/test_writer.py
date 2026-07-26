@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from agentic_analyst.agents.writer import _format_findings, writer
 from agentic_analyst.state import AgentState, Finding, Task
+from tests.conftest import FakeLLM
 
 F1 = Finding(
     task_id=1,
@@ -104,7 +105,7 @@ def test_writer_prompt_bans_the_old_unverified_tag() -> None:
     assert "no `[unverified]`" in text
 
 
-def test_writer_reports_its_own_cost(stub_llm_with_cost: float) -> None:
+def test_writer_reports_its_own_cost(stub_llm_with_cost: FakeLLM) -> None:
     result: dict[str, Any] = writer(_state([F1]))
 
-    assert result["cost_usd"] == stub_llm_with_cost
+    assert result["cost_usd"] == stub_llm_with_cost.charge

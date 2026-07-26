@@ -4,15 +4,21 @@ pytest imports `conftest.py` automatically — test files never import it. Any
 fixture defined here is available by name to every test under `tests/`.
 """
 
+import importlib
+import pkgutil
 from collections.abc import Iterator
+from contextlib import ExitStack
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+import agentic_analyst
 import agentic_analyst.llm as llm
+from agentic_analyst.agents.planner import Plan
 from agentic_analyst.agents.researcher import NextStep, Record, Stop
-from agentic_analyst.state import AgentState, Task
+from agentic_analyst.memory.episodic import RunSummary
+from agentic_analyst.state import AgentState, Critique, Fix, Scores, Task
 
 
 @pytest.fixture(autouse=True)
@@ -43,6 +49,22 @@ def no_throttle() -> Iterator[None]:
     llm.THROTTLE.min_interval = original
 
 
+@pytest.fixture(autouse=True)
+def isolate_memory(tmp_path: Any) -> Iterator[None]:
+    """Point episodic memory at a throwaway Chroma store for every test.
+
+    Without this the suite reads and writes the developer's real `data/chroma`,
+    so tests would see each other's memories, pollute a live store, and pass or
+    fail depending on what the last real run happened to remember.
+    """
+    import agentic_analyst.memory.episodic as episodic
+
+    episodic._get_collection.cache_clear()
+    with patch.object(episodic, "_CHROMA_PATH", tmp_path / "chroma"):
+        yield
+    episodic._get_collection.cache_clear()
+
+
 @pytest.fixture
 def mock_client() -> Iterator[MagicMock]:
     """Swap the real Gemini client for a mock. No network, no API key.
@@ -58,80 +80,157 @@ def mock_client() -> Iterator[MagicMock]:
     llm._get_client.cache_clear()
 
 
-def fake_call(
-    tier: str,
-    system: str,
-    user: str,
-    schema: type | None = None,
-) -> Any:
-    """Stand-in for `llm.call` with the same signature.
+# ════════════════════════════════════════════════════════════════════
+# Stubbing the model
+# ════════════════════════════════════════════════════════════════════
 
-    Dispatches on the requested schema so one stub serves every agent: a Plan
-    for the planner, a researcher step for the researcher, prose for the
-    writer. Enough for the graph to run end to end deterministically.
+
+def modules_importing_call() -> list[str]:
+    """Every module in the package that pulled `call` into its own namespace.
+
+    Agents do `from ..llm import call`, which *copies* the reference. Patching
+    `llm.call` therefore does nothing to them — the patch has to be applied at
+    each module that holds a copy.
+
+    Discovering those modules by walking the package, rather than listing them
+    by hand, is the whole point. The hand-written list is exactly the bug in
+    NOTES.md #6: adding a node that calls the model left a hole the fixture knew
+    nothing about, and the "mocked" suite quietly started hitting the real API.
+    A list has to be maintained; this cannot fall out of date, because a new
+    module that imports `call` is found by the same walk that finds the old ones.
     """
-    if schema is NextStep:
-        # Record one finding, then stop — the shortest path through the loop.
-        if "[did record]" in user:
-            return NextStep(step=Stop(action="stop", reason="evidence gathered"))
-        return NextStep(
-            step=Record(
-                action="record",
-                claim="Baseline energy use is high",
-                quote="Energy use is high",
-                source_url="https://example.com/a",
-                confidence="medium",
+    found = []
+    for info in pkgutil.walk_packages(agentic_analyst.__path__, "agentic_analyst."):
+        module = importlib.import_module(info.name)
+        if getattr(module, "call", None) is llm.call:
+            found.append(info.name)
+    return sorted(found)
+
+
+# Drafts are distinguishable so a test can tell an original from a revision.
+FIRST_DRAFT = "Energy use is high [F1]. Savings are possible [F1]."
+REVISED_DRAFT = "Energy use is high [F1]. Revised: savings are possible [F1]."
+
+PASSING_CRITIQUE = Critique(
+    scores=Scores(groundedness=8, structure=8, actionability=8),
+    weakest_claim="Savings are possible",
+    required_fixes=[],
+)
+
+
+def failing_critique(severity: str = "major") -> Critique:
+    """A critique that fails the pass rule, by score and optionally by veto."""
+    return Critique(
+        scores=Scores(groundedness=4, structure=5, actionability=4),
+        weakest_claim="Savings are possible",
+        required_fixes=[
+            Fix(
+                severity=severity,  # type: ignore[arg-type]
+                issue="The savings figure is not supported by F1",
+                location="## Efficiency options, paragraph 2",
+                suggestion="Cite a finding that states a savings figure, or drop the claim.",
             )
-        )
-    if schema is not None:
-        return schema(
-            tasks=[
-                Task(id=1, goal="Assess baseline energy use"),
-                Task(id=2, goal="Identify efficiency options", depends_on=[1]),
-            ]
-        )
-    return "Energy use is high [F1]. Savings are possible [F1]."
+        ],
+    )
+
+
+class FakeLLM:
+    """A scripted stand-in for `llm.call`, shared by every agent module.
+
+    Dispatches on the requested schema so one stub serves the whole graph, and
+    counts what it was asked for so tests can assert on the shape of a run
+    without hardcoding how many turns the researcher loop happens to take.
+    """
+
+    def __init__(self, charge: float = 0.0) -> None:
+        self.charge = charge
+        self.calls: list[str] = []  # schema name per call, in order
+        # Popped left to right; the last entry repeats once exhausted, so a
+        # test can script "fail, fail, pass" or just "always fail".
+        self.critiques: list[Critique] = [PASSING_CRITIQUE]
+
+    def __call__(
+        self,
+        tier: str,
+        system: str,
+        user: str,
+        schema: type | None = None,
+    ) -> Any:
+        self.calls.append(schema.__name__ if schema is not None else "text")
+
+        if self.charge:
+            # Book the charge the way a real call would, so a test can assert
+            # against RUN_METER.calls rather than a magic number.
+            llm.RUN_METER.total_cost_usd += self.charge
+            llm.RUN_METER.calls += 1
+
+        if schema is None:
+            # The writer. "Required fixes" only appears in a revision prompt.
+            return REVISED_DRAFT if "## Required fixes" in user else FIRST_DRAFT
+
+        if schema is Plan:
+            return Plan(
+                tasks=[
+                    Task(id=1, goal="Assess baseline energy use"),
+                    Task(id=2, goal="Identify efficiency options", depends_on=[1]),
+                ]
+            )
+
+        if schema is NextStep:
+            # Record one finding, then stop — the shortest path through the loop.
+            if "[did record]" in user:
+                return NextStep(step=Stop(action="stop", reason="evidence gathered"))
+            return NextStep(
+                step=Record(
+                    action="record",
+                    claim="Baseline energy use is high",
+                    quote="Energy use is high",
+                    source_url="https://example.com/a",
+                    confidence="medium",
+                )
+            )
+
+        if schema is Critique:
+            return self.critiques.pop(0) if len(self.critiques) > 1 else self.critiques[0]
+
+        if schema is RunSummary:
+            return RunSummary(
+                brief="Assessed energy options.",
+                surprises="Evidence was thin.",
+                what_worked="Searching for the regulator's own figures.",
+            )
+
+        raise AssertionError(f"FakeLLM has no scripted response for schema {schema!r}")
 
 
 @pytest.fixture
-def stub_llm() -> Iterator[None]:
-    """Replace `call` in every agent module with `fake_call`.
+def fake_llm() -> Iterator[FakeLLM]:
+    """Replace `call` in *every* module that imported it, with one fake.
 
-    Patching happens where the name is *used* (`agents.planner.call`), not
-    where it is defined (`llm.call`) — `from ..llm import call` already copied
-    the reference into each agent module, so patching `llm.call` would not be
-    seen by them.
+    Yields the fake so a test can script its critiques or inspect what was
+    asked of it.
     """
-    with (
-        patch("agentic_analyst.agents.planner.call", side_effect=fake_call),
-        patch("agentic_analyst.agents.researcher.call", side_effect=fake_call),
-        patch("agentic_analyst.agents.writer.call", side_effect=fake_call),
-    ):
-        yield
+    fake = FakeLLM()
+    with ExitStack() as stack:
+        for name in modules_importing_call():
+            stack.enter_context(patch(f"{name}.call", side_effect=fake))
+        yield fake
 
 
 @pytest.fixture
-def stub_llm_with_cost() -> Iterator[float]:
-    """Like `stub_llm`, but each call also charges a fixed amount to the meter.
+def stub_llm(fake_llm: FakeLLM) -> FakeLLM:
+    """Alias kept for tests that only need the graph to run, not to script it."""
+    return fake_llm
 
-    Yields the per-call charge so a test can assert on the expected total.
-    """
-    charge = 0.01
 
-    def charging_call(tier: str, system: str, user: str, schema: type | None = None) -> Any:
-        # Book the charge the way a real call would, so a test can assert
-        # against `RUN_METER.calls` instead of hardcoding how many turns the
-        # researcher loop happens to take.
-        llm.RUN_METER.total_cost_usd += charge
-        llm.RUN_METER.calls += 1
-        return fake_call(tier, system, user, schema)
-
-    with (
-        patch("agentic_analyst.agents.planner.call", side_effect=charging_call),
-        patch("agentic_analyst.agents.researcher.call", side_effect=charging_call),
-        patch("agentic_analyst.agents.writer.call", side_effect=charging_call),
-    ):
-        yield charge
+@pytest.fixture
+def stub_llm_with_cost() -> Iterator[FakeLLM]:
+    """Like `fake_llm`, but each call also charges a fixed amount to the meter."""
+    fake = FakeLLM(charge=0.01)
+    with ExitStack() as stack:
+        for name in modules_importing_call():
+            stack.enter_context(patch(f"{name}.call", side_effect=fake))
+        yield fake
 
 
 @pytest.fixture

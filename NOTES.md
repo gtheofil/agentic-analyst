@@ -10,6 +10,24 @@ calls, $0.0222, ~90 seconds end to end, all nodes on `gemini-3.5-flash-lite`.
 Roughly $0.004 of that is pacing-independent overhead; moving the writer to the
 `strong` tier adds about half a cent.
 
+Reference run (Phase 3 complete, 26 Jul 2026): 4 tasks, 8 findings, 30 model
+calls, **$0.0850**, ~200 seconds. Nearly 4× Phase 2, and the breakdown says why:
+
+| Node | Cost | Share |
+|---|---|---|
+| researcher (23 calls, `fast`) | $0.0314 | 37% |
+| writer (1 call, `strong`) | $0.0294 | 35% |
+| critic (1 call, `strong`) | $0.0143 | 17% |
+| planner (1 call, `strong`) | $0.0095 | 11% |
+| memory summariser (1 call, `fast`) | $0.0005 | 0.6% |
+
+Two things worth internalising. **Two calls are 52% of the run** — the writer and
+critic each process the entire draft on the strong tier, so the expensive part of
+this system is no longer the part that does the most work. And **a revision costs
+$0.044**, another writer plus another critic, so a run that uses both revisions
+costs roughly $0.17. That is the number Phase 4.9's budget guard has to be sized
+against, and it is a fifth of a dollar for one report.
+
 ---
 
 ## 1. A schema the model provider silently could not accept
@@ -172,12 +190,102 @@ will eventually disagree — so compute it once.
 
 ---
 
+## 8. The same test-stub hole as #6, in the very next node I added
+
+**Symptom.** The suite took 107 seconds and one cost assertion failed by an odd
+margin — 0.1024 against an expected 0.11. In the logs: `rate limited; the API
+asked for 59s, waiting 60s`.
+
+**Diagnosis.** The "fully mocked" suite was calling the real Gemini API. The
+critic node had been added, `conftest.py` patched planner, researcher and writer
+by name, and the critic reached straight through the fixture to a live client.
+The stray `0.0024` was a real request's real cost landing in the total.
+
+This is **#6 again, in the next node I wrote after writing #6 up**. I had
+correctly diagnosed the class of bug — "a per-module mechanism that a new module
+can silently opt out of by existing" — and then fixed only that instance of it.
+
+**Fix.** The fixture no longer has a list. `modules_importing_call()` walks the
+package and patches every module whose `call` is `llm.call`, so a module cannot
+opt out by existing — it is found by the same walk that finds the others. Three
+tests guard the walk itself: that it finds the known callers, that it is never
+silently empty, and that a full graph run never constructs a real client.
+
+**The interesting part.** Writing the lesson down did not prevent the repeat.
+The note said what the bug *was*; what I needed was for the fix to be structural
+so the next node couldn't reintroduce it. A retrospective is not a control. The
+tell was there in plain sight — a "mocked" suite has no business taking 107
+seconds — and I read that as slowness rather than as evidence.
+
+---
+
+## 9. The quality gate was scoring its own homework
+
+**Symptom.** None. Everything passed, every run finished, the logs looked right.
+
+**Diagnosis.** `Critique` had a `passed: bool` field, so `passed` was a value the
+*model* returned about its own verdict, and `route_after_critic` branched on it
+directly. A model that returned `score=3, passed=True` shipped the draft. The
+critic prompt even ended with the pass rule — mean of the three dimensions ≥ 7,
+no critical fixes — annotated *"the code enforces it"*. The code did not enforce
+it, and could not have: `Critique` carried a single `score`, so there was no mean
+to take, and `required_fixes` was a `list[str]`, so "no critical fixes" was
+unaskable.
+
+**Fix.** The schema now carries what the rule needs — `Scores` with three
+dimensions, and `Fix` with a `severity` — and `passed` became a computed
+`@property` over them. Deliberately a plain `@property` rather than a
+`computed_field`, so it stays out of the JSON schema the model is asked to fill:
+the model can still rate its own work 10/10, but it can no longer also say
+"and therefore ship it". A test asserts `passed` is absent from
+`Critique.model_json_schema()`, because the day it reappears is the day the gate
+quietly stops being one.
+
+**The interesting part.** This is theme #1 exactly inverted, in the one place it
+matters most, and I wrote the inversion myself while believing the opposite —
+the prompt says the code guarantees it, which is precisely how it escaped
+review. A comment claiming an invariant is not an invariant. Worse, it actively
+suppresses the question, because the next reader (me) sees the claim and stops
+looking.
+
+---
+
+## 10. Every guardrail moves the failure — including into a node that can't act
+
+**Symptom.** Forced-fail runs looped, revised, and finalised, exactly as the
+mermaid said. The second draft was simply never better than the first.
+
+**Diagnosis.** `route_after_critic` sent a failed draft back to `"writer"`, and
+the graph comment described it as *"revision mode, consumes fixes"*. But
+`writer()` built its prompt from brief, memory, plan and findings — it never read
+`state["critique"]`. It received a byte-identical prompt and could only re-roll
+the dice. The `required_fixes` the critic had paid a strong-tier call to produce
+were written into state and read by nobody.
+
+**Fix.** The writer takes a second mode: when a critique is present it appends
+the previous draft, the three scores, and the fixes ordered critical-first. And
+`revision_count` moved from the critic to the writer, because the critic was
+counting *critiques issued* — the first of which follows the original draft and
+revises nothing — so `MAX_REVISIONS = 2` bought exactly one rewrite while the
+caveats section reported two.
+
+**The interesting part.** Both halves of this were **routing that looked right
+in the diagram**. The mermaid has an arrow from critic back to writer, the graph
+has that edge, the logs print the hop — and the loop was decorative. A dataflow
+bug hides perfectly behind correct control flow, because every observable
+artefact of the run is exactly what you expected to see. The counter is the same
+shape: an off-by-one in something *named* `revision_count` is invisible until you
+ask what one revision is.
+
+---
+
 ## Recurring themes (the short version for an interview)
 
 1. **Prompts are requests; code is guarantees.** Anything that must be true —
    termination, budgets, no duplicate evidence, `task_id` attribution — lives in
    the loop, not the prompt. I tried the prompt first and have the failed
-   attempt to show for it.
+   attempt to show for it. The sharpest version is #9: a *comment* claiming the
+   code enforced a rule, above code that didn't.
 2. **Mocking a boundary stops you testing the boundary.** The most expensive bug
    was invisible to a full green suite.
 3. **Every guardrail moves the failure.** Fixing "one finding per task" created
@@ -187,3 +295,12 @@ will eventually disagree — so compute it once.
    it spent.
 5. **Pace, don't retry.** Rate limits are predictable and cheaper to avoid than
    to recover from.
+6. **Never let a component grade itself.** The critic's verdict is the model's;
+   whether that verdict passes is the graph's. Anything the system branches on
+   has to be computed from the model's output, never returned by it.
+7. **Correct control flow hides broken dataflow.** #10 routed perfectly and
+   revised nothing. When a loop runs the right number of times, check that the
+   thing going round it is actually changing.
+8. **A written-up lesson is not a control.** I documented #6 and reintroduced it
+   in the next node I wrote. What stopped it recurring was deleting the
+   hand-maintained list, not describing why it was dangerous.
