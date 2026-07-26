@@ -18,6 +18,7 @@ import agentic_analyst.llm as llm
 from agentic_analyst.agents.planner import Plan
 from agentic_analyst.agents.researcher import NextStep, Record, Stop
 from agentic_analyst.memory.episodic import RunSummary
+from agentic_analyst.settings import SETTINGS
 from agentic_analyst.state import AgentState, Critique, Fix, Scores, Task
 
 
@@ -47,6 +48,29 @@ def no_throttle() -> Iterator[None]:
     llm.THROTTLE.min_interval = 0.0
     yield
     llm.THROTTLE.min_interval = original
+
+
+@pytest.fixture(autouse=True)
+def no_tracing(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Never emit telemetry from the test suite.
+
+    `test_runner_smoke` calls `run.main()`, which opens a root span and flushes
+    it. Left alone, a developer with Langfuse keys in `.env` would file two
+    fake runs to their real dashboard on every `pytest`, from a suite whose
+    entire premise is that it touches no network.
+
+    Dropping the keys routes `get_tracer()` down its null-object path, so the
+    tracing code still *runs* in tests — it is just wired to a client that
+    discards everything. Skipping the instrumentation instead would leave it
+    untested.
+    """
+    import agentic_analyst.observability as obs
+
+    monkeypatch.setattr(SETTINGS, "langfuse_public_key", None)
+    monkeypatch.setattr(SETTINGS, "langfuse_secret_key", None)
+    obs.get_tracer.cache_clear()
+    yield
+    obs.get_tracer.cache_clear()
 
 
 @pytest.fixture(autouse=True)

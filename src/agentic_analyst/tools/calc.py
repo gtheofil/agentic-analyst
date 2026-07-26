@@ -4,6 +4,8 @@ import ast
 import operator
 from collections.abc import Callable
 
+from langfuse import observe
+
 _BIN_OPS: dict[type[ast.operator], Callable[[float, float], float]] = {
     ast.Add: operator.add,
     ast.Sub: operator.sub,
@@ -23,6 +25,7 @@ class CalcError(ValueError):
     """Raised for invalid syntax or anything outside the whitelist."""
 
 
+@observe(name="calc", as_type="tool")
 def calc(expr: str) -> float:
     """Evaluate a plain arithmetic expression. No names, calls, or imports."""
     try:

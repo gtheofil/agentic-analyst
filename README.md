@@ -2,12 +2,13 @@
 
 A multi-agent system that turns a one-line business brief into a cited research report.
 
-> **Status: Phase 3 of 7.** The pipeline is
+> **Status: Phase 4a of 7.** The pipeline is
 > `load_memory → planner → researcher → writer ⇄ critic → write_memory`.
 > Claims are cited to gathered evidence, a scored critic gates the draft and
 > sends failures back for revision, and each run leaves a summary of itself
-> behind for the next one. Tracing and an eval harness land in later phases.
-> The full README follows in Phase 5.
+> behind for the next one. Every run emits one nested Langfuse trace — each
+> node, each tool call, and each model call with its tokens and cost. An eval
+> harness lands in a later phase. The full README follows in Phase 5.
 
 ## Quickstart
 
@@ -19,6 +20,11 @@ uv run python -m agentic_analyst.run "Assess energy options for an office buildi
 
 The report is written to `runs/<timestamp>/report.md`, and the total cost of
 the run is printed at the end.
+
+Tracing is optional. Add `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` to
+`.env` (free project at [cloud.langfuse.com](https://cloud.langfuse.com)) and
+each run prints a trace URL alongside its cost. Leave them out and the run
+behaves identically, just unobserved.
 
 No API key? Everything except a live run still works — the package imports,
 lints, type-checks and passes its full mocked test suite with no key present:
@@ -34,6 +40,7 @@ uv run ruff check . && uv run mypy src tests && uv run pytest
 | [src/agentic_analyst/state.py](src/agentic_analyst/state.py) | The typed contracts every agent reads and writes |
 | [src/agentic_analyst/llm.py](src/agentic_analyst/llm.py) | The single door to the model: retries, cost metering, structured output |
 | [src/agentic_analyst/settings.py](src/agentic_analyst/settings.py) | Config, model tiers, prices, paths |
+| [src/agentic_analyst/observability.py](src/agentic_analyst/observability.py) | The only module that knows Langfuse exists |
 | [src/agentic_analyst/agents/](src/agentic_analyst/agents/) | One module per graph node |
 | [src/agentic_analyst/memory/](src/agentic_analyst/memory/) | What survives a run: episodic (earned) and preferences (told) |
 | [src/agentic_analyst/graph.py](src/agentic_analyst/graph.py) | Which node runs, and in what order |
@@ -68,6 +75,14 @@ critical-first. `revision_count` is incremented by the writer, on the pass that
 actually rewrites, so the number means revisions performed. Two is the ceiling,
 after which the report ships with an appended `## Unresolved review issues`
 section rather than silently or never.
+
+**Tracing and cost metering are not the same feature.** Langfuse reports what a
+run cost after it finished; `RUN_METER` tells the running program what it has
+spent so far, which is what a budget guard has to branch on. They read the same
+`_cost_breakdown`, so the dashboard and the terminal cannot drift — one live run
+reconciles at $0.056164 across 37 calls on both. Tracing is deliberately
+optional and fails soft: with no keys `get_tracer()` returns a disabled client
+that silently discards spans, so no call site anywhere contains `if tracing:`.
 
 **Memory is two different things.** `memory/episodic.py` is what the agent
 earned — Chroma-backed summaries of its own past runs, retrieved by similarity

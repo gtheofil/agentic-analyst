@@ -53,5 +53,27 @@ class Settings(BaseSettings):
     # turn the client-side throttle off entirely.
     max_requests_per_minute: int = 12
 
+    # Langfuse tracing. Optional for exactly the reason the Gemini key is: a
+    # fresh clone with no credentials must still import, lint, type-check and
+    # pass the mocked suite. With no keys the tracer no-ops and the run behaves
+    # identically, just unobserved.
+    langfuse_public_key: str | None = None
+    langfuse_secret_key: str | None = None
+    # Langfuse v4 renamed this from LANGFUSE_HOST. EU region by default; US
+    # projects need https://us.cloud.langfuse.com, and a self-hosted instance
+    # its own URL.
+    langfuse_base_url: str = "https://cloud.langfuse.com"
+
+    @property
+    def tracing_enabled(self) -> bool:
+        """Whether traces should be emitted at all.
+
+        Both halves of the key pair or neither: one on its own is a typo, not a
+        configuration, and Langfuse would fail at export time rather than here.
+        Every module asks this question here instead of re-deriving it, so no
+        two of them can disagree about whether tracing is on.
+        """
+        return bool(self.langfuse_public_key and self.langfuse_secret_key)
+
 
 SETTINGS = Settings()

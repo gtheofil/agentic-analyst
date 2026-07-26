@@ -10,6 +10,7 @@ from pathlib import Path
 
 from agentic_analyst.graph import build_graph
 from agentic_analyst.llm import RUN_METER
+from agentic_analyst.observability import callback_handler, flush, get_tracer
 from agentic_analyst.state import AgentState
 
 log = logging.getLogger(__name__)
@@ -60,17 +61,48 @@ def main() -> None:
 
     log.info("run %s | brief: %s", timestamp, brief)
 
+    # One root span per run, so the whole thing is a single trace rather than
+    # seven unrelated ones. Everything below nests inside it automatically:
+    # LangGraph's nodes via the callback handler, and the model calls via the
+    # OpenTelemetry context that `llm.py` writes into. Neither has to be handed
+    # a parent explicitly.
+    trace_url: str | None = None
     try:
-        final_state = build_graph().invoke(initial_state(brief))
-    except RuntimeError as exc:
-        # Configuration problems (no API key, a rate limit that outlasted the
-        # retries, an empty model response) are the user's business, not a
-        # 40-line LangGraph traceback. Report the spend either way: a run that
-        # died halfway still cost real money, and hiding that is how you learn
-        # about it on the invoice.
-        print(f"error: {exc}", file=sys.stderr)
-        print(f"Spent before failing: {RUN_METER.report()}", file=sys.stderr)
-        raise SystemExit(1) from exc
+        with get_tracer().start_as_current_observation(
+            as_type="span",
+            name="analyst-run",
+            input={"brief": brief},
+            metadata={"run_id": timestamp},
+        ) as root:
+            trace_url = get_tracer().get_trace_url()
+            try:
+                final_state = build_graph().invoke(
+                    initial_state(brief),
+                    config={"callbacks": [callback_handler()]},
+                )
+            except RuntimeError as exc:
+                # Configuration problems (no API key, a rate limit that
+                # outlasted the retries, an empty model response) are the
+                # user's business, not a 40-line LangGraph traceback. Report
+                # the spend either way: a run that died halfway still cost real
+                # money, and hiding that is how you learn about it on the
+                # invoice.
+                root.update(level="ERROR", status_message=str(exc))
+                print(f"error: {exc}", file=sys.stderr)
+                print(f"Spent before failing: {RUN_METER.report()}", file=sys.stderr)
+                if trace_url:
+                    print(f"Trace: {trace_url}", file=sys.stderr)
+                raise SystemExit(1) from exc
+
+            # The root span's own I/O is the trace's I/O — `set_trace_io` is
+            # deprecated in v4 precisely because this is the same thing.
+            root.update(output={"draft": final_state["draft"]})
+    finally:
+        # In a `finally` for the same reason the failure branch above reports
+        # the spend: a crashed run is the one whose trace you most want. Spans
+        # are batched on a background thread, so a CLI that exits without this
+        # sends nothing at all — silently, with no error anywhere.
+        flush()
 
     report_path = run_dir / "report.md"
     report_path.write_text(final_state["draft"], encoding="utf-8")
@@ -80,6 +112,8 @@ def main() -> None:
     log.info("meter: %s", RUN_METER.report())
     print(f"Wrote {report_path.resolve()}")
     print(f"Cost: ${final_state['cost_usd']:.6f} across {RUN_METER.calls} model calls")
+    if trace_url:
+        print(f"Trace: {trace_url}")
 
 
 if __name__ == "__main__":
