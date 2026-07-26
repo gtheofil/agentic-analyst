@@ -1,0 +1,11 @@
+# Standing style instructions for the writer.
+#
+# Unlike episodic memory — which the agent earns from its own past runs — these
+# are human-authored and stable. Edit them to steer tone and length without
+# touching code or prompts.
+#
+# They never override the citation rules: a preference can change how a claim
+# reads, never whether it needs a source.
+
+tone: professional and neutral, written for a time-poor executive reader
+length: concise, roughly 600-800 words
