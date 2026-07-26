@@ -70,7 +70,7 @@ def submit_brief(request: BriefRequest, background: BackgroundTasks) -> RunAccep
     already an honest `running` record to read.
     """
     run_id = new_run_id()
-    background.add_task(execute_run, request.brief, run_id)
+    background.add_task(execute_run, request.brief, run_id, entrypoint="api")
     log.info("accepted brief as run %s", run_id)
     return RunAccepted(run_id=run_id, status="accepted", poll=f"/runs/{run_id}")
 

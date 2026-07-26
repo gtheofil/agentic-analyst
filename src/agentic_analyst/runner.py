@@ -184,13 +184,33 @@ def initial_state(brief: str) -> AgentState:
 # ── Executing a run ─────────────────────────────────────────
 
 
-def execute_run(brief: str, run_id: str | None = None) -> RunRecord:
+TRACE_NAME_CHARS = 60
+
+
+def _trace_name(brief: str) -> str:
+    """A trace name you can tell apart from the others in a list."""
+    flat = " ".join(brief.split())
+    return flat if len(flat) <= TRACE_NAME_CHARS else flat[: TRACE_NAME_CHARS - 1] + "…"
+
+
+def execute_run(
+    brief: str,
+    run_id: str | None = None,
+    *,
+    entrypoint: str = "cli",
+    session_id: str | None = None,
+) -> RunRecord:
     """Take one brief through the graph and write the result to `runs/<id>/`.
 
     Never raises for an ordinary failure: a model that gives up, a missing key
     or an exhausted quota comes back as a `RunRecord` with `status="failed"` and
     the spend so far. The caller is an HTTP background task as often as a
     terminal, and a background task that raises is a traceback nobody reads.
+
+    `entrypoint` and `session_id` exist only for the trace: they let the
+    dashboard answer "was this run by a human or by the eval harness" and
+    "which sweep did it belong to", which is otherwise unanswerable once a
+    hundred runs share a project.
     """
     run_id = run_id or new_run_id()
     directory = run_dir(run_id)
@@ -223,9 +243,25 @@ def execute_run(brief: str, run_id: str | None = None) -> RunRecord:
             # model calls via the OpenTelemetry context `llm.py` writes into.
             with get_tracer().start_as_current_observation(
                 as_type="span",
-                name="analyst-run",
+                # The first 60 characters of the brief, not "analyst-run": a
+                # trace list where every row has the same name is a list you
+                # have to open every row of. The run id is still in the
+                # metadata and the URL, so nothing is lost by making the name
+                # the one thing that differs between runs.
+                name=_trace_name(brief),
                 input={"brief": brief},
-                metadata={"run_id": run_id},
+                metadata={
+                    "run_id": run_id,
+                    # Trace-level fields are set through reserved `langfuse_*`
+                    # metadata keys in the v4 SDK — there is no `update_trace`
+                    # on a span, and the OTel attribute names behind these are
+                    # private. Tags and a session are what make the dashboard
+                    # filterable ("show me the eval sweep", "show me what the
+                    # API ran"), which is the difference between a trace list
+                    # and a pile of traces.
+                    "langfuse_tags": ["analyst", f"entry:{entrypoint}"],
+                    "langfuse_session_id": session_id or run_id,
+                },
             ) as root:
                 trace_url = get_tracer().get_trace_url()
                 try:

@@ -161,10 +161,12 @@ class EvalSummary(BaseModel):
         return "\n".join(lines)
 
 
-def evaluate(brief: GoldenBrief, *, offline: bool = False) -> EvalResult:
+def evaluate(brief: GoldenBrief, *, offline: bool = False, sweep_id: str = "") -> EvalResult:
     """Run one golden brief, check it, judge it."""
     log.info("── %s (%s, %s)", brief.id, brief.domain, brief.difficulty)
-    record = execute_run(brief.prompt)
+    # Tagged as an eval run and stamped with the sweep, so the dashboard can
+    # separate "ten runs I was measuring" from "a run someone did by hand".
+    record = execute_run(brief.prompt, entrypoint="eval", session_id=sweep_id or None)
 
     checks = hardcheck(record.run_id, offline=offline)
     log.info("  hardcheck: %s", "pass" if checks.passed else "FAIL")
@@ -210,11 +212,14 @@ def evaluate(brief: GoldenBrief, *, offline: bool = False) -> EvalResult:
 
 
 def run_evals(briefs: list[GoldenBrief], *, offline: bool = False) -> EvalSummary:
+    # One id for the whole sweep, so every trace it produces groups into a
+    # single Langfuse session rather than scattering across the trace list.
+    sweep_id = f"eval-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
     results: list[EvalResult] = []
     for index, brief in enumerate(briefs, 1):
         log.info("[%d/%d]", index, len(briefs))
         try:
-            results.append(evaluate(brief, offline=offline))
+            results.append(evaluate(brief, offline=offline, sweep_id=sweep_id))
         except Exception as exc:  # noqa: BLE001 — one brief must not end the sweep
             log.exception("brief %s blew up entirely", brief.id)
             results.append(
