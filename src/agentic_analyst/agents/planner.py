@@ -36,7 +36,7 @@ def planner(state: AgentState) -> dict[str, Any]:
         # `call` is overloaded: passing schema=Plan makes the return type Plan,
         # so no isinstance check is needed to satisfy the type checker.
         result = call(
-            tier="fast",
+            tier="strong",
             system=system_prompt,
             user=state["brief"],
             schema=Plan,

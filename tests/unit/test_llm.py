@@ -116,15 +116,117 @@ def test_tenacity_retries_on_server_error(mock_client: MagicMock) -> None:
 
 
 def test_tenacity_does_not_retry_client_error(mock_client: MagicMock) -> None:
-    """ClientError (4xx) is permanent → raises immediately, NO retry."""
+    """ClientError (4xx) is permanent → raises immediately, NO retry.
+
+    It surfaces as `LLMError` rather than the SDK's own type: agents catch
+    RuntimeError and stay ignorant of the provider.
+    """
     mock_client.models.generate_content.side_effect = genai_errors.ClientError(
         400, {"error": {"message": "bad request"}}
     )
 
-    with pytest.raises(genai_errors.ClientError):
+    with pytest.raises(llm.LLMError):
         call("fast", "sys", "user")
 
     assert mock_client.models.generate_content.call_count == 1
+
+
+# ════════════════════════════════════════════════════════════════════
+# 3b. Rate limiting (429) — the one 4xx worth retrying
+# ════════════════════════════════════════════════════════════════════
+
+
+def _rate_limited(retry_delay: str | None = "31s") -> genai_errors.ClientError:
+    """A 429 shaped like the real one, with the API's RetryInfo attached."""
+    details: list[dict[str, str]] = []
+    if retry_delay:
+        details.append(
+            {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": retry_delay}
+        )
+    return genai_errors.ClientError(
+        429,
+        {"error": {"code": 429, "message": "Quota exceeded", "details": details}},
+    )
+
+
+def test_rate_limit_is_retried(mock_client: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 429 says "not now", not "never" — unlike every other 4xx."""
+    # Don't actually wait the 32s the API asks for.
+    monkeypatch.setattr("agentic_analyst.llm.time.sleep", lambda _s: None)
+    good = MagicMock(text="ok", usage_metadata=None)
+    mock_client.models.generate_content.side_effect = [_rate_limited(), good]
+
+    assert call("fast", "sys", "user") == "ok"
+    assert mock_client.models.generate_content.call_count == 2
+
+
+def test_rate_limit_waits_as_long_as_the_api_asked(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The server states when the window reopens; guessing wastes the wait."""
+    assert llm._server_retry_hint(_rate_limited("31s")) == pytest.approx(31.0)
+
+
+def test_rate_limit_falls_back_to_backoff_without_a_hint() -> None:
+    """No RetryInfo → exponential backoff, not a crash."""
+    assert llm._server_retry_hint(_rate_limited(retry_delay=None)) is None
+
+
+def test_persistent_rate_limit_gives_a_human_error(
+    mock_client: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After the retries, the CLI must print advice, not a 60-line traceback."""
+    monkeypatch.setattr("agentic_analyst.llm.time.sleep", lambda _s: None)
+    mock_client.models.generate_content.side_effect = _rate_limited()
+
+    with pytest.raises(llm.LLMError, match="rate limit"):
+        call("fast", "sys", "user")
+
+
+# ════════════════════════════════════════════════════════════════════
+# 3c. The throttle that stops us reaching a 429 in the first place
+# ════════════════════════════════════════════════════════════════════
+
+
+def test_throttle_spaces_calls_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pacing under the quota is cheaper than retrying after breaching it."""
+    slept: list[float] = []
+    clock = [100.0]
+    monkeypatch.setattr("agentic_analyst.llm.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("agentic_analyst.llm.time.sleep", slept.append)
+
+    throttle = llm.Throttle(min_interval=5.0)
+    throttle.wait()  # first call: nothing to wait for
+    clock[0] += 2.0  # only 2s later
+    throttle.wait()
+
+    assert slept == [pytest.approx(3.0)], "should top the gap up to 5s"
+
+
+def test_throttle_does_not_delay_a_call_that_is_already_late(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = [100.0]
+    slept: list[float] = []
+    monkeypatch.setattr("agentic_analyst.llm.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("agentic_analyst.llm.time.sleep", slept.append)
+
+    throttle = llm.Throttle(min_interval=5.0)
+    throttle.wait()
+    clock[0] += 9.0
+
+    throttle.wait()
+
+    assert slept == []
+
+
+def test_throttle_can_be_turned_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`MAX_REQUESTS_PER_MINUTE=0` for a paid key, and for the test suite."""
+
+    def _fail(_s: float) -> None:
+        pytest.fail("throttle slept when disabled")
+
+    monkeypatch.setattr("agentic_analyst.llm.time.sleep", _fail)
+
+    llm.Throttle(min_interval=0.0).wait()
 
 
 # ════════════════════════════════════════════════════════════════════

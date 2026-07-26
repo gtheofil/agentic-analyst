@@ -4,18 +4,18 @@ Run with: pytest -m integration
 Skipped automatically if GOOGLE_API_KEY is not set.
 """
 
-import os
-
 import pytest
 from pydantic import BaseModel
 
 from agentic_analyst.llm import call
+from agentic_analyst.settings import SETTINGS
 
 # ── Module-level skip if no API key ─────────────────────────
+
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.skipif(
-        not os.getenv("GOOGLE_API_KEY"),
+        not SETTINGS.google_api_key,  # ← reads .env via pydantic
         reason="GOOGLE_API_KEY not set",
     ),
 ]
