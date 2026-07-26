@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import ast
 import operator
+from collections.abc import Callable
 
-_BIN_OPS = {
+_BIN_OPS: dict[type[ast.operator], Callable[[float, float], float]] = {
     ast.Add: operator.add,
     ast.Sub: operator.sub,
     ast.Mult: operator.mul,
@@ -12,7 +13,7 @@ _BIN_OPS = {
     ast.Mod: operator.mod,
     ast.Pow: operator.pow,
 }
-_UNARY_OPS = {
+_UNARY_OPS: dict[type[ast.unaryop], Callable[[float], float]] = {
     ast.UAdd: operator.pos,
     ast.USub: operator.neg,
 }
@@ -34,9 +35,9 @@ def calc(expr: str) -> float:
 def _eval(node: ast.AST) -> float:
     if isinstance(node, ast.Constant):
         # bool is a subclass of int — reject it so True/False can't sneak in.
-        if isinstance(node.value, bool) or not isinstance(node.value, (int, float)):
+        if isinstance(node.value, bool) or not isinstance(node.value, int | float):
             raise CalcError(f"Only numbers allowed, got {node.value!r}")
-        return node.value
+        return float(node.value)
 
     if isinstance(node, ast.BinOp):
         op = _BIN_OPS.get(type(node.op))
@@ -45,9 +46,9 @@ def _eval(node: ast.AST) -> float:
         return op(_eval(node.left), _eval(node.right))
 
     if isinstance(node, ast.UnaryOp):
-        op = _UNARY_OPS.get(type(node.op))
-        if op is None:
+        unary_op = _UNARY_OPS.get(type(node.op))
+        if unary_op is None:
             raise CalcError(f"Unary op {type(node.op).__name__} not allowed")
-        return op(_eval(node.operand))
+        return unary_op(_eval(node.operand))
 
     raise CalcError(f"Disallowed expression: {type(node).__name__}")

@@ -15,7 +15,7 @@ from agentic_analyst.settings import SETTINGS
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.skipif(
-        not SETTINGS.google_api_key,        # ← reads .env via pydantic
+        not SETTINGS.google_api_key,  # ← reads .env via pydantic
         reason="GOOGLE_API_KEY not set",
     ),
 ]

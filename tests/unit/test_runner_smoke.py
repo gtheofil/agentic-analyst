@@ -21,7 +21,7 @@ def test_runner_writes_report(
 
     reports = list(tmp_path.glob("runs/*/report.md"))
     assert len(reports) == 1
-    assert "[unverified]" in reports[0].read_text(encoding="utf-8")
+    assert "[F1]" in reports[0].read_text(encoding="utf-8")
 
 
 def test_runner_exits_without_a_brief(monkeypatch: pytest.MonkeyPatch) -> None:

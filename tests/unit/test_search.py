@@ -10,13 +10,13 @@ import pytest
 from agentic_analyst.tools.search import SearchArgs, SearchResult, search
 
 
-def test_search_filters_blocklist_and_shapes(monkeypatch):
+def test_search_filters_blocklist_and_shapes(monkeypatch: pytest.MonkeyPatch) -> None:
     # Canned raw Tavily response: 3 hits, one on a blocked domain.
     fake_response = {
         "results": [
-            {"title": "Good one",  "url": "https://example.com/a", "content": "aaa"},
+            {"title": "Good one", "url": "https://example.com/a", "content": "aaa"},
             {"title": "Pinterest", "url": "https://pinterest.com/x", "content": "bad"},
-            {"title": "Good two",  "url": "https://example.org/b", "content": "bbb"},
+            {"title": "Good two", "url": "https://example.org/b", "content": "bbb"},
         ]
     }
 
@@ -41,7 +41,7 @@ def test_search_filters_blocklist_and_shapes(monkeypatch):
     assert all("pinterest.com" not in r.url for r in results)
 
 
-def test_search_respects_k(monkeypatch):
+def test_search_respects_k(monkeypatch: pytest.MonkeyPatch) -> None:
     # 4 clean hits available, but we only ask for 2.
     fake_response = {
         "results": [
@@ -63,7 +63,7 @@ def test_search_respects_k(monkeypatch):
     assert len(results) == 2
 
 
-def test_k_is_capped():
+def test_k_is_capped() -> None:
     # k > 5 must be rejected by the model itself, before any call is made.
     with pytest.raises(ValueError):
         SearchArgs(query="anything", k=99)

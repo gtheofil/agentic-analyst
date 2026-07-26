@@ -14,8 +14,10 @@ Two kinds of retry live here and they are deliberately separate:
 """
 
 import logging
+import re
+import time
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import overload
@@ -25,7 +27,7 @@ from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
 from pydantic import BaseModel
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import RetryCallState, retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from agentic_analyst.settings import MODEL_TIERS, PRICES, SETTINGS
 
@@ -149,17 +151,94 @@ RUN_METER = RunMeter()
 # The call itself
 # ════════════════════════════════════════════════════════════════════
 
-_RETRYABLE = (
+_TRANSPORT_ERRORS = (
     genai_errors.ServerError,
     httpx.TimeoutException,
     httpx.ConnectError,
 )
+RATE_LIMITED = 429
+MAX_RATE_LIMIT_WAIT = 65.0  # a per-minute quota can never need longer
+
+
+@dataclass
+class Throttle:
+    """Client-side spacing between API calls.
+
+    The free tier allows 15 requests per minute per model, and one researcher
+    task alone can spend eight. Without this the graph discovers the quota by
+    hitting it, halfway through a run, having already paid for everything
+    before the failure. Spacing the calls is cheaper than retrying them, so
+    the retry below is the safety net rather than the mechanism.
+
+    `min_interval = 0` disables it — that is what the mocked test suite uses.
+    """
+
+    min_interval: float
+    _last_call: float = 0.0
+
+    def wait(self) -> None:
+        if self.min_interval <= 0:
+            return
+        gap = self.min_interval - (time.monotonic() - self._last_call)
+        if gap > 0:
+            log.debug("throttling %.1fs to stay under the rate limit", gap)
+            time.sleep(gap)
+        self._last_call = time.monotonic()
+
+
+THROTTLE = Throttle(
+    min_interval=60.0 / SETTINGS.max_requests_per_minute
+    if SETTINGS.max_requests_per_minute > 0
+    else 0.0
+)
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    """Transport failures, and rate limiting — but no other 4xx.
+
+    A 429 is the one client error worth retrying: it says "not now", not
+    "never". A 400 or a 403 would fail identically forever.
+    """
+    if isinstance(exc, _TRANSPORT_ERRORS):
+        return True
+    return isinstance(exc, genai_errors.ClientError) and getattr(exc, "code", None) == RATE_LIMITED
+
+
+def _server_retry_hint(exc: BaseException) -> float | None:
+    """Seconds the API itself asked us to wait, if it said.
+
+    A 429 carries a RetryInfo telling you exactly when the window reopens.
+    Guessing with exponential backoff when the server has already told you
+    the answer means waiting either too long or not long enough.
+    """
+    details = getattr(exc, "details", None)
+    if isinstance(details, dict):
+        for item in details.get("error", {}).get("details", []):
+            delay = item.get("retryDelay") if isinstance(item, dict) else None
+            if isinstance(delay, str) and delay.endswith("s"):
+                with suppress(ValueError):
+                    return float(delay[:-1])
+    match = re.search(r"retry in ([\d.]+)s", str(exc))
+    return float(match.group(1)) if match else None
+
+
+_BACKOFF = wait_exponential(multiplier=1, min=1, max=10)
+
+
+def _wait_strategy(retry_state: RetryCallState) -> float:
+    exc = retry_state.outcome.exception() if retry_state.outcome else None
+    hint = _server_retry_hint(exc) if exc else None
+    if hint is not None:
+        wait = min(hint + 1.0, MAX_RATE_LIMIT_WAIT)
+        log.warning("rate limited; the API asked for %.0fs, waiting %.0fs", hint, wait)
+        return wait
+    return _BACKOFF(retry_state)
 
 
 @retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=1, max=10),
-    retry=retry_if_exception_type(_RETRYABLE),
+    stop=stop_after_attempt(4),
+    wait=_wait_strategy,
+    retry=retry_if_exception(_is_retryable),
     reraise=True,
 )
 def _raw_generate(
@@ -170,14 +249,25 @@ def _raw_generate(
     """Single, tenacity-guarded door to the network.
 
     Every API call in this module goes through here, so transient errors
-    (5xx / timeouts) are retried in exactly one place. Retries 3x with
-    exponential backoff; ClientError (4xx) is NOT retryable and bubbles up.
+    (5xx / timeouts / 429) are retried in exactly one place. Any other
+    ClientError (4xx) is permanent and bubbles up unretried.
     """
+    THROTTLE.wait()
     return _get_client().models.generate_content(
         model=model_id,
         contents=contents,
         config=config,
     )
+
+
+class LLMError(RuntimeError):
+    """The provider failed in a way retrying will not fix.
+
+    Agents catch `RuntimeError`, never `google.genai.errors.*` — that is what
+    keeps the provider swappable in `settings.py` alone, and it is why a
+    quota-exhausted API ends one task instead of dumping a LangGraph traceback
+    over an otherwise finished run.
+    """
 
 
 def _generate_and_meter(
@@ -186,7 +276,17 @@ def _generate_and_meter(
     config: types.GenerateContentConfig,
 ) -> types.GenerateContentResponse:
     """One metered, logged round trip."""
-    resp = _raw_generate(model_id, user, config)
+    try:
+        resp = _raw_generate(model_id, user, config)
+    except genai_errors.APIError as exc:
+        if getattr(exc, "code", None) == RATE_LIMITED:
+            raise LLMError(
+                "Gemini rate limit still hit after retries. The free tier allows "
+                f"15 requests/minute; this run is pacing at "
+                f"{SETTINGS.max_requests_per_minute}/minute. Lower "
+                "MAX_REQUESTS_PER_MINUTE in .env, or wait a minute and re-run."
+            ) from exc
+        raise LLMError(f"Gemini call failed: {exc}") from exc
     usage = resp.usage_metadata
     cost = RUN_METER.record(model_id, usage)
     log.info(

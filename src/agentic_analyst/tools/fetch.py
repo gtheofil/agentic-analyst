@@ -6,9 +6,7 @@ from pydantic import BaseModel, Field
 
 _TIMEOUT = 10.0
 _MAX_BYTES = 1000 * 1024  # 1MB cap
-_HEADERS = {
-    "User-Agent": "consulting-agent/0.1 (research tool; contact: gt@gmail.com)"
-}
+_HEADERS = {"User-Agent": "consulting-agent/0.1 (research tool; contact: gt@gmail.com)"}
 
 
 class FetchArgs(BaseModel):
@@ -33,7 +31,7 @@ def fetch(args: FetchArgs) -> FetchResult:
 def _download(url: str, client: httpx.Client | None = None) -> str:
     """Stream the body, aborting once we cross the byte cap."""
     owns = client is None
-    
+
     client = client or httpx.Client(
         timeout=_TIMEOUT,
         follow_redirects=True,
