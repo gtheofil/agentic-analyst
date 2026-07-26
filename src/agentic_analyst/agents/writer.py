@@ -15,8 +15,9 @@ import logging
 from typing import Any
 
 from ..llm import RUN_METER, call
+from ..memory.preferences import format_preferences, load_preferences
 from ..settings import PROMPTS_DIR
-from ..state import AgentState, Finding, Task
+from ..state import AgentState, Critique, Finding, Task
 
 log = logging.getLogger(__name__)
 
@@ -54,30 +55,99 @@ def _format_findings(findings: list[Finding]) -> str:
     return "\n\n".join(blocks)
 
 
+def _format_revision(draft: str, critique: Critique) -> str:
+    """Render the previous draft and the critic's fixes as a revision brief.
+
+    Without this the writer is re-run on byte-identical inputs and can only
+    re-roll the dice: it has no way to know what was wrong, so a "revision" is
+    an expensive coin flip. Fixes are ordered critical-first because a critical
+    one is a veto — no amount of polish elsewhere passes the draft while it
+    stands.
+    """
+    order = {"critical": 0, "major": 1, "minor": 2}
+    fixes = sorted(critique.required_fixes, key=lambda f: order[f.severity])
+
+    lines = [
+        "## Your previous draft",
+        draft,
+        "",
+        "## Review outcome",
+        (
+            f"Scores — groundedness {critique.scores.groundedness}/10, "
+            f"structure {critique.scores.structure}/10, "
+            f"actionability {critique.scores.actionability}/10 "
+            f"(mean {critique.scores.mean:.1f}; {Critique.PASS_MEAN:.0f} is needed to pass)."
+        ),
+        f"Weakest claim identified: {critique.weakest_claim}",
+        "",
+        "## Required fixes",
+    ]
+    if fixes:
+        lines.extend(
+            f"{i}. [{f.severity}] {f.location} — {f.issue}\n   Suggested: {f.suggestion}"
+            for i, f in enumerate(fixes, 1)
+        )
+    else:
+        lines.append("(none itemised — raise the weakest claim above to the evidence.)")
+    return "\n".join(lines)
+
+
 def writer(state: AgentState) -> dict[str, Any]:
     """Turn the plan and findings into a cited markdown draft.
 
-    Reads:  state["brief"], state["memory_context"], state["plan"], state["findings"]
-    Writes: state["draft"], state["cost_usd"]
+    Runs in two modes off the same prompt. On the first pass `critique` is None
+    and this writes from scratch. After a failed review the graph routes back
+    here, and the previous draft plus the critic's required fixes are appended
+    to the input — so a revision is a targeted edit rather than a re-roll.
+
+    Reads:  state["brief"], state["memory_context"], state["plan"],
+            state["findings"], state["critique"], state["draft"],
+            state["revision_count"]
+    Writes: state["draft"], state["revision_count"], state["cost_usd"]
+
+    The counter is incremented *here*, on the pass that actually rewrites, so
+    `revision_count` means "revisions performed". Incrementing it in the critic
+    instead would count critiques — including the first one, which follows the
+    original draft and revises nothing — and the loop would stop a revision
+    early while reporting one more than it did.
     """
     system_prompt = _PROMPT_PATH.read_text(encoding="utf-8")
     findings = state["findings"]
+    critique = state["critique"]
 
     user_prompt = (
         f"Brief:\n{state['brief']}\n\n"
         f"Background:\n{state['memory_context']}\n\n"
+        f"{format_preferences(load_preferences())}\n\n"
         f"Plan:\n{_format_plan(state['plan'])}\n\n"
         f"Findings:\n{_format_findings(findings)}\n"
     )
 
+    revising = critique is not None
+    if critique is not None:
+        user_prompt += (
+            "\n---\n"
+            "You have written this report before and it did not pass review. "
+            "Revise it: address every required fix below, keep what was already "
+            "working, and obey the same citation rules. Return the full corrected "
+            "report, not a diff or a summary of your changes.\n\n"
+            f"{_format_revision(state['draft'], critique)}\n"
+        )
+
     with RUN_METER.track() as spend:
-        draft = call(tier="strong", system=system_prompt, user=user_prompt)
+        draft = call(tier="fast", system=system_prompt, user=user_prompt)
+
+    revision_count = state["revision_count"] + (1 if revising else 0)
 
     log.info(
-        "writer produced %d chars from %d findings (cost $%.6f)",
+        "writer %s %d chars from %d findings (revision %d, cost $%.6f)",
+        "revised to" if revising else "produced",
         len(draft),
         len(findings),
+        revision_count,
         spend.usd,
     )
 
-    return {"draft": draft, "cost_usd": spend.usd}
+    # revision_count has no reducer, so returning it overwrites the old value
+    # (unlike cost_usd, which the graph sums).
+    return {"draft": draft, "revision_count": revision_count, "cost_usd": spend.usd}

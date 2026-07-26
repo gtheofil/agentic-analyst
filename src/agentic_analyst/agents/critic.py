@@ -13,20 +13,25 @@ _PROMPT_PATH = PROMPTS_DIR / "critic.md"
 
 
 def _render_sources(findings: list[Finding]) -> str:
-    """Flatten the findings into a numbered evidence block for the critic.
+    """Flatten the findings into a labelled evidence block for the critic.
 
-    Findings have no id of their own, so we number them [1], [2], ... in order.
-    Each line exposes the researcher's `claim`, the verbatim `quote` that backs
+    Findings have no id of their own, so they are labelled `F1`, `F2`, ... in
+    order — the *same* labels the writer used when it cited them. That match
+    matters: the critic's main job is checking whether `[F3]` in the draft
+    really is backed by F3, and it cannot do that if it sees the evidence under
+    different names than the draft cites.
+
+    Each entry exposes the researcher's `claim`, the verbatim `quote` that backs
     it, the `source_url`, and the `confidence`, so the critic can check whether
     the draft's assertions actually match the evidence — and can be sceptical of
     anything leaning on a low-confidence finding.
     """
     if not findings:
-        return "(no sources provided)"
+        return "(no sources provided — every factual claim in the draft is unsupported)"
     lines = []
     for i, f in enumerate(findings, start=1):
         lines.append(
-            f"[{i}] claim: {f.claim}\n"
+            f"[F{i}] claim: {f.claim}\n"
             f'    quote: "{f.quote}"\n'
             f"    source: {f.source_url} (confidence: {f.confidence})"
         )
@@ -36,44 +41,42 @@ def _render_sources(findings: list[Finding]) -> str:
 def critic(state: AgentState) -> dict[str, Any]:
     """Judge the current draft against the findings that backed it.
 
-    Reads:  state["draft"], state["findings"], state["revision_count"]
-    Writes: state["critique"], state["revision_count"], state["cost_usd"]
+    Reads:  state["draft"], state["findings"]
+    Writes: state["critique"], state["cost_usd"]
+
+    Note it does *not* touch `revision_count`. The writer owns that counter,
+    incrementing it when it actually performs a revision, so the number means
+    "revisions done" rather than "critiques issued".
     """
     system_prompt = _PROMPT_PATH.read_text(encoding="utf-8")
 
     # The critic needs both the sources and the draft in one user message so it
     # can judge groundedness by aligning the draft's claims to the findings.
-    user_msg = (
-        "## Sources\n"
-        f"{_render_sources(state['findings'])}\n\n"
-        "## Draft\n"
-        f"{state['draft']}"
-    )
+    user_msg = f"## Sources\n{_render_sources(state['findings'])}\n\n## Draft\n{state['draft']}"
 
     with RUN_METER.track() as spend:
         # schema=Critique makes `call` return a validated Critique, so no
         # isinstance check is needed to satisfy the type checker.
         result = call(
-            tier="strong",
+            tier="fast",
             system=system_prompt,
             user=user_msg,
             schema=Critique,
         )
 
+    # `passed` is computed from the scores and severities, not read off the
+    # model's response — see Critique in state.py.
     log.info(
-        "critic scored %d/10 (passed=%s, %d fixes, cost $%.6f)",
-        result.score,
+        "critic scored g=%d s=%d a=%d (mean %.1f) -> passed=%s (cost $%.6f)",
+        result.scores.groundedness,
+        result.scores.structure,
+        result.scores.actionability,
+        result.scores.mean,
         result.passed,
-        len(result.required_fixes),
         spend.usd,
     )
+    for fix in result.required_fixes:
+        log.info("  [%s] %s — %s", fix.severity, fix.location, fix.issue)
     log.info("  weakest claim: %s", result.weakest_claim)
 
-    # Increment here so the writer<->critic loop has a single, reliable counter
-    # to terminate on. revision_count has no reducer, so returning the new value
-    # overwrites the old one (unlike cost_usd, which is summed).
-    return {
-        "critique": result,
-        "revision_count": state["revision_count"] + 1,
-        "cost_usd": spend.usd,
-    }
+    return {"critique": result, "cost_usd": spend.usd}

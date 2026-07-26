@@ -16,6 +16,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PROMPTS_DIR = PROJECT_ROOT / "prompts"
 
+# Things the agent writes (the Chroma store) vs. things a human writes for it
+# (prefs.yaml). Kept apart so `data/` can be .gitignored wholesale while
+# `config/` is committed.
+DATA_DIR = PROJECT_ROOT / "data"
+CONFIG_DIR = PROJECT_ROOT / "config"
+
 MODEL_TIERS: dict[str, str] = {
     "strong": "gemini-3.6-flash",
     "fast": "gemini-3.5-flash-lite",

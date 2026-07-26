@@ -30,6 +30,11 @@ reports/*
 runs/
 *.log
 
+# What the agent writes about itself (the Chroma store). Machine-generated and
+# machine-readable, and it embeds the content of past runs — config/prefs.yaml
+# is the human-authored half and *is* committed.
+data/
+
 # --- Personal notes, never pushed ---
 .local/
 

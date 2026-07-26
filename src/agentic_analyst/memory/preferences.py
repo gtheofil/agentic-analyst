@@ -39,8 +39,4 @@ def load_preferences() -> Preferences:
 
 def format_preferences(prefs: Preferences) -> str:
     """Render preferences as a prompt fragment the writer can drop in."""
-    return (
-        "## Style preferences\n"
-        f"- Tone: {prefs.tone}\n"
-        f"- Length: {prefs.length}"
-    )
+    return f"## Style preferences\n- Tone: {prefs.tone}\n- Length: {prefs.length}"
