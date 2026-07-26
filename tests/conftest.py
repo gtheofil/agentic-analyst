@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import agentic_analyst.llm as llm
+from agentic_analyst.agents.researcher import NextStep, Record, Stop
 from agentic_analyst.state import AgentState, Task
 
 
@@ -25,6 +26,21 @@ def reset_meter() -> Iterator[None]:
     llm.RUN_METER.reset()
     yield
     llm.RUN_METER.reset()
+
+
+@pytest.fixture(autouse=True)
+def no_throttle() -> Iterator[None]:
+    """Disable the client-side rate limiter for every test.
+
+    `llm.THROTTLE` spaces real API calls ~5s apart to stay under the free-tier
+    quota. Left on, the mocked suite would sleep through it for no reason —
+    the tests never touch the network. `test_llm.py` re-enables it explicitly
+    where the throttle itself is what is under test.
+    """
+    original = llm.THROTTLE.min_interval
+    llm.THROTTLE.min_interval = 0.0
+    yield
+    llm.THROTTLE.min_interval = original
 
 
 @pytest.fixture
@@ -50,9 +66,23 @@ def fake_call(
 ) -> Any:
     """Stand-in for `llm.call` with the same signature.
 
-    Returns a valid Plan when a schema is requested, and citation-tagged prose
-    otherwise — enough for the graph to run end to end deterministically.
+    Dispatches on the requested schema so one stub serves every agent: a Plan
+    for the planner, a researcher step for the researcher, prose for the
+    writer. Enough for the graph to run end to end deterministically.
     """
+    if schema is NextStep:
+        # Record one finding, then stop — the shortest path through the loop.
+        if "[did record]" in user:
+            return NextStep(step=Stop(action="stop", reason="evidence gathered"))
+        return NextStep(
+            step=Record(
+                action="record",
+                claim="Baseline energy use is high",
+                quote="Energy use is high",
+                source_url="https://example.com/a",
+                confidence="medium",
+            )
+        )
     if schema is not None:
         return schema(
             tasks=[
@@ -60,7 +90,7 @@ def fake_call(
                 Task(id=2, goal="Identify efficiency options", depends_on=[1]),
             ]
         )
-    return "Energy use is high [unverified]. Savings are possible [unverified]."
+    return "Energy use is high [F1]. Savings are possible [F1]."
 
 
 @pytest.fixture
@@ -74,6 +104,7 @@ def stub_llm() -> Iterator[None]:
     """
     with (
         patch("agentic_analyst.agents.planner.call", side_effect=fake_call),
+        patch("agentic_analyst.agents.researcher.call", side_effect=fake_call),
         patch("agentic_analyst.agents.writer.call", side_effect=fake_call),
     ):
         yield
@@ -88,11 +119,16 @@ def stub_llm_with_cost() -> Iterator[float]:
     charge = 0.01
 
     def charging_call(tier: str, system: str, user: str, schema: type | None = None) -> Any:
+        # Book the charge the way a real call would, so a test can assert
+        # against `RUN_METER.calls` instead of hardcoding how many turns the
+        # researcher loop happens to take.
         llm.RUN_METER.total_cost_usd += charge
+        llm.RUN_METER.calls += 1
         return fake_call(tier, system, user, schema)
 
     with (
         patch("agentic_analyst.agents.planner.call", side_effect=charging_call),
+        patch("agentic_analyst.agents.researcher.call", side_effect=charging_call),
         patch("agentic_analyst.agents.writer.call", side_effect=charging_call),
     ):
         yield charge

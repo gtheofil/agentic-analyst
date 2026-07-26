@@ -63,9 +63,13 @@ def main() -> None:
     try:
         final_state = build_graph().invoke(initial_state(brief))
     except RuntimeError as exc:
-        # Configuration problems (no API key, empty model response) are the
-        # user's business, not a 40-line LangGraph traceback.
+        # Configuration problems (no API key, a rate limit that outlasted the
+        # retries, an empty model response) are the user's business, not a
+        # 40-line LangGraph traceback. Report the spend either way: a run that
+        # died halfway still cost real money, and hiding that is how you learn
+        # about it on the invoice.
         print(f"error: {exc}", file=sys.stderr)
+        print(f"Spent before failing: {RUN_METER.report()}", file=sys.stderr)
         raise SystemExit(1) from exc
 
     report_path = run_dir / "report.md"

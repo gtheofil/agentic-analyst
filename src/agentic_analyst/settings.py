@@ -39,6 +39,13 @@ class Settings(BaseSettings):
     # mocked test suite with no key present. The key is only required at the
     # moment a real API call is made — see `llm._get_client`.
     google_api_key: str | None = None
+    tavily_api_key: str | None = None
+
+    # The Gemini free tier allows 15 requests/minute/model, and a four-task run
+    # makes roughly thirty calls. Default a little under the ceiling so a run
+    # is paced rather than rate-limited; raise it on a paid key, or set 0 to
+    # turn the client-side throttle off entirely.
+    max_requests_per_minute: int = 12
 
 
 SETTINGS = Settings()
