@@ -53,6 +53,13 @@ class Settings(BaseSettings):
     # turn the client-side throttle off entirely.
     max_requests_per_minute: int = 12
 
+    # What one run may spend before the budget guard refuses further calls.
+    # A four-task run costs ~$0.085, and one that uses both revisions ~$0.17,
+    # so $0.50 is roughly 3x the worst observed run: high enough never to fire
+    # on a healthy run, low enough that a pathological one cannot quietly cost
+    # a dollar. 0 disables the guard.
+    max_run_cost_usd: float = 0.50
+
     # Langfuse tracing. Optional for exactly the reason the Gemini key is: a
     # fresh clone with no credentials must still import, lint, type-check and
     # pass the mocked suite. With no keys the tracer no-ops and the run behaves

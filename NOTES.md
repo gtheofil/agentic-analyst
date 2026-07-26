@@ -325,6 +325,108 @@ happily spent an hour fixing that one.
 
 ---
 
+## 12. Test isolation that failed open
+
+**Symptom.** A run directory I did not create appeared in my real `runs/`
+folder, timestamped during a `pytest` invocation.
+
+**Diagnosis.** `runs/` had been `Path("runs")` — relative to the working
+directory — so the smoke test isolated itself by `monkeypatch.chdir(tmp_path)`.
+Adding the API made that path wrong: a server's working directory is whatever
+systemd or Docker felt like, so the registry became an absolute path under the
+repo root. The chdir then isolated nothing. The test did not fail; it wrote a
+real run into my own history and then asserted about the empty temp directory,
+which is how it *did* eventually fail — one assertion late, on the wrong thing.
+
+**Fix.** An autouse `isolate_runs` fixture that patches `runner.RUNS_DIR` for
+every test, sitting next to the `isolate_memory` fixture that already did
+exactly this for the Chroma store. Isolation is now a property of the suite, not
+something each test remembers to arrange.
+
+**The interesting part.** The bug was in the *test*, and it failed open —
+writing to production data rather than erroring. A test that isolates by
+arranging the world (chdir, cwd, an env var) is isolated only for as long as the
+code keeps reading the world the same way. The version that patches the thing
+being read cannot drift, because the thing being read is the thing being
+patched. There is a general shape here that #6 and #8 share: any guard whose
+correctness depends on a *convention* the production code follows is one
+refactor away from silently not guarding.
+
+---
+
+## 13. The fixture's blind spot, asked about before it bit
+
+**Symptom.** None — this one was found by asking, not by failing.
+
+The eval judge (`evals/judge.py`) makes model calls, and `evals/` sits outside
+`src/agentic_analyst/`. The `modules_importing_call()` walk that guarantees no
+module can reach the real API from the mocked suite walked exactly one package:
+the one the previous two instances of this bug had been in.
+
+**Fix.** The walk covers both packages. Two lines.
+
+**The interesting part.** I only looked because #8's lesson was that the fix
+must be structural, and the structure had an edge — "every module in the
+package" is a guarantee whose scope is a package boundary, and I had just put a
+model call outside it. The reasoning that would have missed it is entirely
+reasonable-sounding: *the judge is not an agent, it is test infrastructure, the
+fixture is about agents.* That is the same sentence as "the critic is new, the
+fixture lists the old nodes", one abstraction up.
+
+Also worth recording because it is cheap to say and expensive to learn: the
+suite is fast and green, so nothing here is evidence the walk is correct. The
+tests that make it so are the three in `test_stub_coverage.py` that assert the
+walk finds the known callers, is never empty, and that a full graph run
+constructs no real client.
+
+---
+
+## 14. "Not now" and "not today" arrive as the same status code
+
+**Symptom.** Phase 4b's acceptance run, submitted through the new API, sat at
+the planner for three minutes and then failed with the rate-limit advice from
+#5: *the free tier allows 15 requests/minute; this run is pacing at 12/minute.*
+Following that advice — wait a minute, re-run — reproduced it exactly. Twice.
+Meanwhile a hand-written one-line call to the model succeeded immediately.
+
+**Diagnosis.** The hand-written probe used the `fast` tier. The planner uses
+`strong`, and the free tier meters **per model, per day**: 20 requests/day for
+`gemini-3.6-flash`. That allowance had gone, and it was reported as a 429 —
+the same status code as a per-minute burst, carrying a `retryDelay` of 35
+seconds, which is a true statement about a window that is not the binding one.
+The distinguishing information was there all along, in a `QuotaFailure` detail
+naming `GenerateRequestsPerDayPerProjectPerModel-FreeTier`, which nothing read.
+
+So the retry policy did the wrong thing at every level: it retried four times
+(three minutes), waited the delay the response suggested each time, and then
+printed advice about per-minute pacing that sent me to re-run and spend another
+three minutes on the same wall.
+
+**Fix.** `_is_retryable` now reads the quota id and refuses to retry a `PerDay`
+violation; the error names the model, the quota, and says pacing will not help.
+The failure went from three minutes to one second, with a message that leads
+somewhere. The test uses the response payload copied verbatim from the real
+429, `retryDelay` included, because the whole difficulty is that the payload
+looks retryable.
+
+**The interesting part.** #5 concluded "pace, don't retry", and I built pacing
+that treats the provider's limits as one global number. They are not one
+number: they are per model, per minute *and* per day, and a client-side pacer
+that knows about only one of those dimensions will eventually be confidently
+wrong about the others. The deeper error is the same one as #9 — **the code
+believed a claim rather than checking it**. There, a comment asserted the graph
+enforced a rule it did not. Here, `retryDelay` asserted a wait that would work,
+and the retry policy took the provider's word for it while ignoring the field
+next to it that said otherwise.
+
+Worth noting what this cost and what it did not. The run failed at the first
+model call, so the failure path from #5 held perfectly: `status: "failed"`,
+`$0.000000` spent, the error written to `run.json` where the API could serve it,
+and no traceback anywhere. A graceful failure is not a fixed failure, but it is
+the difference between diagnosing this in three minutes and losing an evening.
+
+---
+
 ## Recurring themes (the short version for an interview)
 
 1. **Prompts are requests; code is guarantees.** Anything that must be true —
@@ -339,8 +441,10 @@ happily spent an hour fixing that one.
 4. **Fail into a usable state.** Tool errors become observations; one task's
    model failure ends that task, not the report; a crashed run still prints what
    it spent.
-5. **Pace, don't retry.** Rate limits are predictable and cheaper to avoid than
-   to recover from.
+5. **Pace, don't retry** — but know which limit you are pacing against. Rate
+   limits are cheaper to avoid than to recover from (#5), and they are not one
+   number: per model, per minute *and* per day, arriving as the same 429 (#14).
+   A limit you retry into is one you pay three minutes to rediscover.
 6. **Never let a component grade itself.** The critic's verdict is the model's;
    whether that verdict passes is the graph's. Anything the system branches on
    has to be computed from the model's output, never returned by it.
@@ -354,3 +458,7 @@ happily spent an hour fixing that one.
    with everything green. The check that caught it was comparing a new number
    against one I already trusted — which is only possible because the meter
    existed first.
+10. **Don't take the provider's word for it.** #14 retried into a daily quota
+    for three minutes because the response suggested a 35-second wait, while
+    the field beside it named the quota that had actually run out. The same
+    shape as #9: believing a claim instead of checking the thing it claims.

@@ -1,0 +1,21 @@
+id: market-entry-heat-pumps
+domain: market-entry
+difficulty: medium
+smoke: false
+
+brief: >
+  A UK heat-pump installation company with 60 engineers is considering entering
+  the Republic of Ireland. Assess the opportunity and the main barriers.
+
+must_cover:
+  - Irish heat-pump installation volumes or targets, cited to a named source
+  - The grant/subsidy regime and how it differs from the UK's
+  - Certification or regulatory requirements an installer must meet locally
+  - Labour availability, given that the constraint in this trade is engineers
+    rather than demand
+  - A go/no-go recommendation with the decisive uncertainty named
+
+rationale: >
+  A market where public policy documents carry the numbers, so good evidence
+  exists and is findable. Tests whether the agent checks the supply side — the
+  binding constraint — rather than only sizing demand.

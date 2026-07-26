@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Callable
 from typing import Any
 
 from langchain_core.runnables import Runnable
@@ -8,8 +9,9 @@ from .agents.critic import critic
 from .agents.planner import planner
 from .agents.researcher import researcher
 from .agents.writer import writer
-from .llm import RUN_METER
+from .llm import RUN_METER, over_budget
 from .memory.episodic import load_memory, write_memory
+from .settings import SETTINGS
 from .state import AgentState, Critique, Finding
 
 log = logging.getLogger(__name__)
@@ -94,6 +96,86 @@ def finalize_with_caveats(state: AgentState) -> dict[str, Any]:
     return {"draft": "\n".join(lines)}
 
 
+def finalize_over_budget(state: AgentState) -> dict[str, Any]:
+    """Terminal node for a run that hit its cost cap mid-flight.
+
+    Makes no model call — it cannot, that is the whole point — so it works with
+    whatever the run had already produced. Two shapes, depending on how far it
+    got: an unreviewed draft, or (if the researcher exhausted the budget before
+    the writer ever ran) the raw findings, which are still evidence a human can
+    read even though nobody wrote them up.
+
+    The alternative, letting `BudgetExceeded` propagate out of `invoke`, would
+    throw away the state along with the money already spent on it.
+    """
+    draft = state["draft"]
+    findings = state["findings"]
+    spent = state["cost_usd"]
+
+    header = [
+        "---",
+        "## Incomplete — run budget exhausted",
+        (
+            f"This run stopped early after spending ${spent:.4f} of its "
+            f"${SETTINGS.max_run_cost_usd:.2f} cap. What follows was produced "
+            "before the cap was reached and has not been through review."
+        ),
+        "",
+    ]
+
+    if draft:
+        log.warning("over budget after the draft; shipping it unreviewed")
+        return {"draft": "\n".join([draft, "", *header])}
+
+    log.warning("over budget before a draft existed; shipping %d raw findings", len(findings))
+    lines = [
+        "# Report unavailable",
+        "",
+        *header,
+        (
+            f"No report was written. The {len(findings)} finding(s) gathered before the "
+            "budget ran out are listed below, unsynthesised."
+            if findings
+            else "No report was written and no evidence was gathered."
+        ),
+        "",
+    ]
+    for i, finding in enumerate(findings, 1):
+        lines.extend(
+            [
+                f"**[F{i}]** ({finding.confidence} confidence) {finding.claim}",
+                f"> {finding.quote}",
+                f"— {finding.source_url}",
+                "",
+            ]
+        )
+    return {"draft": "\n".join(lines)}
+
+
+def route_on_budget(next_node: str) -> Callable[[AgentState], str]:
+    """Build a router that goes to `next_node` unless the run is out of money.
+
+    A factory because the same question is asked at two different edges, and
+    LangGraph identifies a conditional edge by its function. Asked *between*
+    nodes, on the cheap side of the expensive ones: the writer and the critic
+    each cost about a third of a run, so the useful moment to check is before
+    paying for one, not after.
+    """
+
+    def router(state: AgentState) -> str:
+        if over_budget():
+            log.warning(
+                "budget cap $%.2f reached ($%.6f spent); skipping %s",
+                SETTINGS.max_run_cost_usd,
+                state["cost_usd"],
+                next_node,
+            )
+            return "finalize_over_budget"
+        return next_node
+
+    return router
+
+
 def route_after_critic(state: AgentState) -> str:
     """Decide where to go once the critic has produced a verdict.
 
@@ -150,6 +232,7 @@ def build_graph() -> Runnable[AgentState, dict[str, Any]]:
     workflow.add_node("writer", writer)
     workflow.add_node("critic", critic)
     workflow.add_node("finalize_with_caveats", finalize_with_caveats)
+    workflow.add_node("finalize_over_budget", finalize_over_budget)
     workflow.add_node("write_memory", write_memory)
 
     # Memory is read before planning, so the plan itself benefits from what
@@ -157,10 +240,21 @@ def build_graph() -> Runnable[AgentState, dict[str, Any]]:
     workflow.add_edge(START, "load_memory")
     workflow.add_edge("load_memory", "planner")
     workflow.add_edge("planner", "researcher")
-    workflow.add_edge("researcher", "writer")
 
-    # Writer always hands off to the critic for judgement.
-    workflow.add_edge("writer", "critic")
+    # The two expensive hand-offs are guarded by the cost cap. Both are the
+    # same question asked before paying for a strong-tier call over the whole
+    # draft; the researcher is not guarded here because it is guarded call by
+    # call inside its own loop, by the same cap in `llm._check_budget`.
+    workflow.add_conditional_edges(
+        "researcher",
+        route_on_budget("writer"),
+        {"writer": "writer", "finalize_over_budget": "finalize_over_budget"},
+    )
+    workflow.add_conditional_edges(
+        "writer",
+        route_on_budget("critic"),
+        {"critic": "critic", "finalize_over_budget": "finalize_over_budget"},
+    )
 
     # The critic's verdict decides the next hop. The dict maps the router's
     # return values to real node names.
@@ -174,11 +268,17 @@ def build_graph() -> Runnable[AgentState, dict[str, Any]]:
         },
     )
 
-    # Both terminal paths write memory before ending. A run that failed review
-    # is the one most worth remembering — "this kind of brief goes badly" is a
-    # lesson, and routing only the successes to memory would leave the agent
-    # remembering an unrepresentatively easy history.
+    # Both *completed* paths write memory before ending. A run that failed
+    # review is the one most worth remembering — "this kind of brief goes
+    # badly" is a lesson, and routing only the successes to memory would leave
+    # the agent remembering an unrepresentatively easy history.
     workflow.add_edge("finalize_with_caveats", "write_memory")
     workflow.add_edge("write_memory", END)
+
+    # The over-budget path is the exception, and goes straight to END. Writing
+    # memory costs a model call, which is precisely what this run has run out
+    # of permission to make — `_check_budget` would refuse it and the graceful
+    # exit would end in the exception it exists to avoid.
+    workflow.add_edge("finalize_over_budget", END)
 
     return workflow.compile()

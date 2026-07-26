@@ -1,0 +1,23 @@
+id: retail-returns-policy
+domain: retail
+difficulty: medium
+smoke: false
+
+brief: >
+  An online fashion retailer is considering charging for returns. Assess the
+  likely effect on revenue, margin and customer retention, and recommend a
+  policy.
+
+must_cover:
+  - Typical return rates in online fashion, cited
+  - The cost of processing a return (logistics, restocking, write-off)
+  - At least one named retailer that introduced return fees and what followed
+  - The retention/lifetime-value risk, not just the per-order saving
+  - A recommended policy specific enough to implement (who is charged, how much,
+    with what exceptions)
+
+rationale: >
+  Tests whether the agent trades off two numbers that point in opposite
+  directions, rather than reporting the one that supports the framing it was
+  given. The per-order arithmetic is easy and public; the retention effect is
+  where the decision actually lives.

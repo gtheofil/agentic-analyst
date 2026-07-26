@@ -1,0 +1,21 @@
+id: market-entry-eu-payments
+domain: market-entry
+difficulty: hard
+smoke: false
+
+brief: >
+  A US B2B payments company wants to serve EU customers. Assess the regulatory
+  and operational requirements, and recommend a sequencing.
+
+must_cover:
+  - The licence or authorisation actually required (and that passporting from
+    one member state exists)
+  - Data-residency and GDPR obligations that bite on a payments processor
+  - SEPA instant-payment requirements and their timing
+  - A realistic time and cost order-of-magnitude for authorisation
+  - A recommended sequence — what must be true before the next step
+
+rationale: >
+  Hard because the regulatory landscape changes and a stale citation is worse
+  than none. Tests dated sourcing: a good report says when its rules were
+  current, and a bad one states a 2019 requirement as present tense.

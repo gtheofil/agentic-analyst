@@ -192,6 +192,28 @@ class RunMeter:
 RUN_METER = RunMeter()
 
 
+def spent_so_far() -> float:
+    """What this run has cost up to now.
+
+    A thin accessor rather than callers reaching into `RUN_METER` themselves,
+    because this is the number the budget guard branches on and the graph reads
+    between nodes — and the meter is going to have to become run-scoped rather
+    than process-global the day the researcher fans out in parallel.
+    """
+    return RUN_METER.total_cost_usd
+
+
+def over_budget() -> bool:
+    """Whether the run has already spent its cap.
+
+    The *question* form of the guard, for callers that can do something better
+    than raise — the graph asks this between nodes and routes to a terminal
+    node that finishes the report without spending anything more.
+    """
+    cap = SETTINGS.max_run_cost_usd
+    return cap > 0 and spent_so_far() >= cap
+
+
 # ════════════════════════════════════════════════════════════════════
 # The call itself
 # ════════════════════════════════════════════════════════════════════
@@ -238,15 +260,64 @@ THROTTLE = Throttle(
 )
 
 
+def _error_details(exc: BaseException) -> list[dict[str, object]]:
+    """The `error.details` list Google attaches to an APIError, or nothing."""
+    details = getattr(exc, "details", None)
+    if not isinstance(details, dict):
+        return []
+    items = details.get("error", {}).get("details", [])
+    return [item for item in items if isinstance(item, dict)]
+
+
+def _exhausted_quota_id(exc: BaseException) -> str | None:
+    """Which quota the provider says was exceeded, if it said.
+
+    A 429 carries a `QuotaFailure` naming the metric — and the free tier meters
+    two very different things through the same status code. Per-minute is a
+    burst you wait out; per-day is a wall until midnight Pacific.
+    """
+    for item in _error_details(exc):
+        if not str(item.get("@type", "")).endswith("QuotaFailure"):
+            continue
+        violations = item.get("violations")
+        if isinstance(violations, list):
+            for violation in violations:
+                if isinstance(violation, dict) and (quota := violation.get("quotaId")):
+                    return str(quota)
+    return None
+
+
+def _is_daily_quota(exc: BaseException) -> bool:
+    """Whether this 429 is a daily allowance rather than a burst.
+
+    The distinction is worth code because the response does not make it: a
+    `PerDay` violation still arrives with a `retryDelay` of half a minute, which
+    is not a lie so much as an irrelevance — the window it refers to reopens,
+    the daily quota does not.
+    """
+    quota = _exhausted_quota_id(exc)
+    return quota is not None and "PerDay" in quota
+
+
 def _is_retryable(exc: BaseException) -> bool:
     """Transport failures, and rate limiting — but no other 4xx.
 
     A 429 is the one client error worth retrying: it says "not now", not
     "never". A 400 or a 403 would fail identically forever.
+
+    Except when the 429 means "not today". A daily-quota 429 is retried three
+    times over three minutes, each attempt waiting the ~35s the response
+    suggests, and every one of them fails identically — so the run pays three
+    minutes to rediscover a wall, and the operator reads "rate limited, waiting
+    59s" and reasonably concludes it is a burst they can wait out.
     """
     if isinstance(exc, _TRANSPORT_ERRORS):
         return True
-    return isinstance(exc, genai_errors.ClientError) and getattr(exc, "code", None) == RATE_LIMITED
+    if not (
+        isinstance(exc, genai_errors.ClientError) and getattr(exc, "code", None) == RATE_LIMITED
+    ):
+        return False
+    return not _is_daily_quota(exc)
 
 
 def _server_retry_hint(exc: BaseException) -> float | None:
@@ -315,6 +386,36 @@ class LLMError(RuntimeError):
     """
 
 
+class BudgetExceededError(LLMError):
+    """The run has spent its cap, so this call was refused before it was sent.
+
+    An `LLMError` on purpose: every agent already treats a `RuntimeError` from
+    the model as "this unit of work ends, the run continues", so the researcher
+    loop degrades to the findings it already has without knowing budgets exist.
+
+    The cap bounds what is spent *before* a call, so a run can overshoot it by
+    at most the cost of the call in flight. Checking afterwards would report the
+    overspend rather than prevent it.
+    """
+
+
+def _check_budget() -> None:
+    """Refuse to spend past the cap. Called before every request, no exceptions.
+
+    Here rather than in the graph because this is the choke point every model
+    call in the system already goes through — the lesson of NOTES.md #6 and #8
+    is that a per-node guard is one a new node can silently opt out of by
+    existing. The graph's own budget routing (`over_budget`) is the *graceful*
+    layer on top; this is the one that actually holds.
+    """
+    cap = SETTINGS.max_run_cost_usd
+    if cap > 0 and RUN_METER.total_cost_usd >= cap:
+        raise BudgetExceededError(
+            f"Run budget of ${cap:.2f} exhausted (${RUN_METER.total_cost_usd:.6f} spent "
+            f"across {RUN_METER.calls} calls). Raise MAX_RUN_COST_USD in .env to allow more."
+        )
+
+
 def _generate_and_meter(
     model_id: str,
     user: str,
@@ -336,6 +437,7 @@ def _generate_and_meter(
     case — it invokes this function a second time and therefore shows up as a
     second generation, which is exactly what you want to be able to see.
     """
+    _check_budget()  # before the span: a refused call is not a generation
     with get_tracer().start_as_current_observation(
         as_type="generation",
         name=f"{tier}:{model_id}",
@@ -347,6 +449,18 @@ def _generate_and_meter(
         try:
             resp = _raw_generate(model_id, user, config)
         except genai_errors.APIError as exc:
+            if _is_daily_quota(exc):
+                # Named separately because the advice is the opposite: nothing
+                # about this run's pacing will help, and re-running now just
+                # spends the same wall again. The free tier's daily allowance
+                # for the strong tier is small enough (tens of calls) that an
+                # eval sweep can exhaust it in one sitting.
+                raise LLMError(
+                    f"Gemini daily free-tier quota exhausted for {model_id} "
+                    f"({_exhausted_quota_id(exc)}). This resets at midnight "
+                    "Pacific — pacing will not help. Use a paid key, or point the "
+                    f"'{tier}' tier at another model in settings.MODEL_TIERS."
+                ) from exc
             if getattr(exc, "code", None) == RATE_LIMITED:
                 raise LLMError(
                     "Gemini rate limit still hit after retries. The free tier allows "

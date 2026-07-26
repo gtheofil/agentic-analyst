@@ -1,0 +1,80 @@
+name: Evals
+
+# Separate from `ci.yml` on purpose. That workflow is free, fast and runs on
+# everything; this one costs real money and several minutes, so it only fires
+# when something that can change report *quality* changes — prompts, agents,
+# rubrics, the golden set. A PR touching the README does not need to spend $0.30
+# to prove it did not break the writer.
+on:
+  pull_request:
+    paths:
+      - "prompts/**"
+      - "src/agentic_analyst/**"
+      - "evals/**"
+      - ".github/workflows/evals.yml"
+  workflow_dispatch:
+    inputs:
+      full:
+        description: "Run all 10 briefs instead of the 3-brief smoke set"
+        type: boolean
+        default: false
+
+# A new push supersedes the previous eval run. Without this, three pushes in ten
+# minutes pay for three sweeps and only the last one is read.
+concurrency:
+  group: evals-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke-evals:
+    runs-on: ubuntu-latest
+    # Roughly 3 briefs x 35 calls, paced under the free-tier rate limit, plus
+    # judging. ~12 minutes in practice; the timeout is a runaway guard, and the
+    # per-run budget cap in settings.py is the money guard underneath it.
+    timeout-minutes: 30
+
+    # Secrets are not exposed to forked pull requests, so this job would fail on
+    # every external contribution. Skipping is the honest outcome — a fork's
+    # evals have to be run by a maintainer.
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Run evals
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+          # Traces from CI would mix with local runs on the same dashboard, and
+          # the keys are not needed for the run to work. Left unset deliberately.
+        run: |
+          uv run python -m evals.run_evals --smoke --out evals/results/ci
+
+      - name: Summarise on the PR
+        if: always()
+        run: cat evals/results/ci/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results
+          # The runs themselves, not just the summary: when a hard-check fails,
+          # the question is always "what did it actually write", and re-running
+          # to find out costs another $0.30 and produces a different report.
+          path: |
+            evals/results/ci/
+            runs/
+          retention-days: 14

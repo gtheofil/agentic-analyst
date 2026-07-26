@@ -1,0 +1,24 @@
+id: retail-discounter-response
+domain: retail
+difficulty: hard
+smoke: false
+
+brief: >
+  A mid-sized UK supermarket chain is losing share to discounters. Assess
+  whether expanding its premium own-brand range is a credible response, and
+  what the alternatives are.
+
+must_cover:
+  - Discounter share of the UK grocery market, with a trend and a date
+  - Own-brand margin economics versus branded lines
+  - At least one alternative lever (price-matching, loyalty pricing, range
+    rationalisation) with evidence on whether it worked elsewhere
+  - Evidence on whether premium own-brand actually retains the shoppers who
+    are leaving, rather than the ones who are staying
+  - An explicit statement of what the evidence does not settle
+
+rationale: >
+  Hard because the obvious answer (premium own-brand is growing, so do more of
+  it) is a composition fallacy: the customers switching to discounters are not
+  the customers buying premium tiers. A good report notices that the evidence
+  for the strategy and the evidence for the problem are about different people.

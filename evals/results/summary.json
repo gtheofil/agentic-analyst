@@ -1,0 +1,99 @@
+{
+  "generated_at": "2026-07-26 20:12 UTC",
+  "tiers": {
+    "strong": "gemini-3.6-flash",
+    "fast": "gemini-3.5-flash-lite"
+  },
+  "results": [
+    {
+      "brief_id": "ops-four-day-week",
+      "domain": "ops",
+      "difficulty": "easy",
+      "run_id": "20260726T200452Z",
+      "completed": true,
+      "hardcheck_passed": true,
+      "hardcheck_detail": [
+        "[WARN] source urls: 2/4 reachable; 2 refused the request rather than 404ing: https://sloanreview.mit.edu/article/four-day-workweek-make-it-stick (403); https://www.bc.edu/bc-web/bcnews/nation-world-society/sociology/-study-pilots-four-day-work-week.html (406)"
+      ],
+      "citation_resolution": 1.0,
+      "scores": {
+        "coverage": 3,
+        "groundedness": 1,
+        "actionability": 1
+      },
+      "justifications": {
+        "coverage": "The report effectively addresses retention and burnout evidence with specific figures from trial studies. However, it fails to include the sample size and execution period for the named trials. It also fails to address the specific billing/utilisation problem inherent to a consultancy business model, merely noting that data on billable hours was absent. Finally, the recommendations lack a concrete trial design and fail to specify what metrics would be measured during the trial.",
+        "groundedness": "judge failed: Gemini daily free-tier quota exhausted for gemini-3.6-flash (GenerateRequestsPerDayPerProjectPerModel-FreeTier). This resets at midnight Pacific — pacing will not help. Use a paid key, or point the 'strong' tier at another model in settings.MODEL_TIERS.",
+        "actionability": "judge failed: Gemini daily free-tier quota exhausted for gemini-3.6-flash (GenerateRequestsPerDayPerProjectPerModel-FreeTier). This resets at midnight Pacific — pacing will not help. Use a paid key, or point the 'strong' tier at another model in settings.MODEL_TIERS."
+      },
+      "missing": [
+        "Findings from a named four-day-week trial, with the sample and the period",
+        "The utilisation/billing problem specific to a consultancy, where revenue is billed hours",
+        "A trial design concrete enough to run, with what would be measured"
+      ],
+      "mean_score": 1.67,
+      "cost_usd": 0.0430073,
+      "judge_cost_usd": 0.014280000000000001,
+      "duration_seconds": 143.004771,
+      "findings": 8,
+      "revisions": 0,
+      "error": null
+    },
+    {
+      "brief_id": "ops-warehouse-automation",
+      "domain": "ops",
+      "difficulty": "medium",
+      "run_id": "20260726T200732Z",
+      "completed": true,
+      "hardcheck_passed": true,
+      "hardcheck_detail": [],
+      "citation_resolution": 1.0,
+      "scores": {
+        "coverage": 1,
+        "groundedness": 1,
+        "actionability": 1
+      },
+      "justifications": {
+        "coverage": "judge failed: Gemini daily free-tier quota exhausted for gemini-3.6-flash (GenerateRequestsPerDayPerProjectPerModel-FreeTier). This resets at midnight Pacific — pacing will not help. Use a paid key, or point the 'strong' tier at another model in settings.MODEL_TIERS.",
+        "groundedness": "judge failed: Gemini daily free-tier quota exhausted for gemini-3.6-flash (GenerateRequestsPerDayPerProjectPerModel-FreeTier). This resets at midnight Pacific — pacing will not help. Use a paid key, or point the 'strong' tier at another model in settings.MODEL_TIERS.",
+        "actionability": "judge failed: Gemini daily free-tier quota exhausted for gemini-3.6-flash (GenerateRequestsPerDayPerProjectPerModel-FreeTier). This resets at midnight Pacific — pacing will not help. Use a paid key, or point the 'strong' tier at another model in settings.MODEL_TIERS."
+      },
+      "missing": [],
+      "mean_score": 1.0,
+      "cost_usd": 0.0328672,
+      "judge_cost_usd": 0.0,
+      "duration_seconds": 127.786442,
+      "findings": 2,
+      "revisions": 1,
+      "error": null
+    },
+    {
+      "brief_id": "retail-meal-kits",
+      "domain": "retail",
+      "difficulty": "medium",
+      "run_id": "20260726T200954Z",
+      "completed": true,
+      "hardcheck_passed": true,
+      "hardcheck_detail": [],
+      "citation_resolution": 1.0,
+      "scores": {
+        "coverage": 1,
+        "groundedness": 1,
+        "actionability": 1
+      },
+      "justifications": {
+        "coverage": "judge failed: Gemini daily free-tier quota exhausted for gemini-3.6-flash (GenerateRequestsPerDayPerProjectPerModel-FreeTier). This resets at midnight Pacific — pacing will not help. Use a paid key, or point the 'strong' tier at another model in settings.MODEL_TIERS.",
+        "groundedness": "judge failed: Gemini daily free-tier quota exhausted for gemini-3.6-flash (GenerateRequestsPerDayPerProjectPerModel-FreeTier). This resets at midnight Pacific — pacing will not help. Use a paid key, or point the 'strong' tier at another model in settings.MODEL_TIERS.",
+        "actionability": "judge failed: Gemini daily free-tier quota exhausted for gemini-3.6-flash (GenerateRequestsPerDayPerProjectPerModel-FreeTier). This resets at midnight Pacific — pacing will not help. Use a paid key, or point the 'strong' tier at another model in settings.MODEL_TIERS."
+      },
+      "missing": [],
+      "mean_score": 1.0,
+      "cost_usd": 0.04202850000000001,
+      "judge_cost_usd": 0.0,
+      "duration_seconds": 166.11021,
+      "findings": 4,
+      "revisions": 0,
+      "error": null
+    }
+  ]
+}

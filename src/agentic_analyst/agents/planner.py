@@ -35,8 +35,18 @@ def planner(state: AgentState) -> dict[str, Any]:
     with RUN_METER.track() as spend:
         # `call` is overloaded: passing schema=Plan makes the return type Plan,
         # so no isinstance check is needed to satisfy the type checker.
+        #
+        # `fast`, not `strong`, and this is a *quota* decision rather than a
+        # quality one — worth being honest about, because it is the wrong way
+        # round on the merits. Planning is the highest-leverage call in the
+        # system: it decides what gets researched at all, and everything
+        # downstream is bounded by it. But the free tier allows 20 requests a
+        # day to the strong model, which is one planner call per run, and a
+        # demo you cannot run is worth less than a plan that is slightly
+        # blunter. Move it back the day the key is paid — that is the whole
+        # point of asking for a tier rather than naming a model.
         result = call(
-            tier="strong",
+            tier="fast",
             system=system_prompt,
             user=state["brief"],
             schema=Plan,

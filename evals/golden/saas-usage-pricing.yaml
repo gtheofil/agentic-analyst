@@ -1,0 +1,22 @@
+id: saas-usage-pricing
+domain: saas
+difficulty: hard
+smoke: false
+
+brief: >
+  A mid-market analytics SaaS company charges per seat. Its largest customers
+  are adding automated workloads that consume far more compute than human users
+  do. Should it move to usage-based pricing?
+
+must_cover:
+  - The margin problem created when consumption decouples from seat count
+  - Evidence on how usage-based pricing affects revenue predictability
+  - At least one named SaaS company that made this transition and what happened
+  - The customer-side objection (budget unpredictability) and a mitigation
+    such as committed spend or caps
+  - A migration path for existing contracts, not just an end state
+
+rationale: >
+  Hard for a research agent because the good evidence is in vendor-published
+  benchmarks with an obvious interest in the answer. Tests whether the report
+  attributes claims to who made them, or launders marketing into fact.
