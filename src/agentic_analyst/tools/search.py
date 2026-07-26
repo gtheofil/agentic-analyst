@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from langfuse import observe
 from pydantic import BaseModel, Field
 from tavily import TavilyClient  # type: ignore[import-untyped]
 
@@ -38,6 +39,7 @@ def _is_blocked(url: str) -> bool:
     return any(bad in url for bad in _BLOCKLIST)
 
 
+@observe(name="search", as_type="tool")
 def search(args: SearchArgs) -> list[SearchResult]:
     client = _get_client()
 

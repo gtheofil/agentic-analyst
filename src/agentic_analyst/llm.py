@@ -29,6 +29,7 @@ from google.genai import types
 from pydantic import BaseModel
 from tenacity import RetryCallState, retry, retry_if_exception, stop_after_attempt, wait_exponential
 
+from agentic_analyst.observability import get_tracer
 from agentic_analyst.settings import MODEL_TIERS, PRICES, SETTINGS
 
 log = logging.getLogger(__name__)
@@ -80,6 +81,51 @@ def _billed_output_tokens(
     return (usage.candidates_token_count or 0) + (usage.thoughts_token_count or 0)
 
 
+def _usage_breakdown(
+    usage: types.GenerateContentResponseUsageMetadata | None,
+) -> dict[str, int]:
+    """Tokens split by billing bucket.
+
+    The buckets are mutually exclusive — every token is counted in exactly one
+    of them — which is both what a tracing backend requires and the only way
+    the parts can be trusted to sum to the whole.
+
+    `thinking` is separated from `output` for visibility, not for pricing: it
+    bills at the output rate (see `_cost_breakdown`). Keeping it visible is
+    deliberate, because invisible tokens you pay for are exactly the ones that
+    go unnoticed.
+    """
+    if usage is None:
+        return {}
+    return {
+        "input": usage.prompt_token_count or 0,
+        "output": usage.candidates_token_count or 0,
+        "thinking": usage.thoughts_token_count or 0,
+    }
+
+
+def _cost_breakdown(
+    model_id: str,
+    usage: types.GenerateContentResponseUsageMetadata | None,
+) -> dict[str, float]:
+    """USD per bucket — the only place a rate is ever multiplied by a count.
+
+    Both the run meter and the tracer read this. That is the point: pricing the
+    same call twice, in two places, is how the number on the dashboard and the
+    number in the terminal quietly stop agreeing.
+    """
+    rates = PRICES[model_id]
+    per_million = {
+        "input": rates["input"],
+        "output": rates["output"],
+        "thinking": rates["output"],  # billed as output, reported separately
+    }
+    return {
+        bucket: tokens / 1_000_000 * per_million[bucket]
+        for bucket, tokens in _usage_breakdown(usage).items()
+    }
+
+
 @dataclass
 class RunMeter:
     """Running total of tokens and spend for the process.
@@ -105,8 +151,7 @@ class RunMeter:
             return 0.0
         in_tok = usage.prompt_token_count or 0
         out_tok = _billed_output_tokens(usage)
-        rates = PRICES[model_id]
-        cost = in_tok / 1_000_000 * rates["input"] + out_tok / 1_000_000 * rates["output"]
+        cost = sum(_cost_breakdown(model_id, usage).values())
         self.total_input_tokens += in_tok
         self.total_output_tokens += out_tok
         self.total_cost_usd += cost
@@ -274,30 +319,70 @@ def _generate_and_meter(
     model_id: str,
     user: str,
     config: types.GenerateContentConfig,
+    *,
+    tier: str,
+    schema_name: str | None = None,
 ) -> types.GenerateContentResponse:
-    """One metered, logged round trip."""
-    try:
-        resp = _raw_generate(model_id, user, config)
-    except genai_errors.APIError as exc:
-        if getattr(exc, "code", None) == RATE_LIMITED:
-            raise LLMError(
-                "Gemini rate limit still hit after retries. The free tier allows "
-                f"15 requests/minute; this run is pacing at "
-                f"{SETTINGS.max_requests_per_minute}/minute. Lower "
-                "MAX_REQUESTS_PER_MINUTE in .env, or wait a minute and re-run."
-            ) from exc
-        raise LLMError(f"Gemini call failed: {exc}") from exc
-    usage = resp.usage_metadata
-    cost = RUN_METER.record(model_id, usage)
-    log.info(
-        "llm call model=%s in=%s out=%s (thinking=%s) cost=$%.6f",
-        model_id,
-        usage.prompt_token_count if usage else "?",
-        _billed_output_tokens(usage),
-        (usage.thoughts_token_count or 0) if usage else "?",
-        cost,
-    )
-    return resp
+    """One metered, traced, logged round trip.
+
+    This is the only function in the system that talks to a model, so it is the
+    only one that has to be instrumented. Every agent gets tracing for free by
+    virtue of going through `call()`.
+
+    The span covers the *logical* call, not each HTTP attempt: tenacity's
+    retries happen inside `_raw_generate`, so a rate-limited call that
+    eventually succeeds appears as one generation with a long latency rather
+    than four confusing siblings. The schema retry in `call()` is the opposite
+    case — it invokes this function a second time and therefore shows up as a
+    second generation, which is exactly what you want to be able to see.
+    """
+    with get_tracer().start_as_current_observation(
+        as_type="generation",
+        name=f"{tier}:{model_id}",
+        model=model_id,
+        input={"system": config.system_instruction, "user": user},
+        model_parameters={"max_output_tokens": MAX_OUTPUT_TOKENS},
+        metadata={"tier": tier, "schema": schema_name},
+    ) as gen:
+        try:
+            resp = _raw_generate(model_id, user, config)
+        except genai_errors.APIError as exc:
+            if getattr(exc, "code", None) == RATE_LIMITED:
+                raise LLMError(
+                    "Gemini rate limit still hit after retries. The free tier allows "
+                    f"15 requests/minute; this run is pacing at "
+                    f"{SETTINGS.max_requests_per_minute}/minute. Lower "
+                    "MAX_REQUESTS_PER_MINUTE in .env, or wait a minute and re-run."
+                ) from exc
+            raise LLMError(f"Gemini call failed: {exc}") from exc
+        usage = resp.usage_metadata
+        cost = RUN_METER.record(model_id, usage)
+        log.info(
+            "llm call model=%s in=%s out=%s (thinking=%s) cost=$%.6f",
+            model_id,
+            usage.prompt_token_count if usage else "?",
+            _billed_output_tokens(usage),
+            (usage.thoughts_token_count or 0) if usage else "?",
+            cost,
+        )
+        # Our own prices, not Langfuse's model table: PRICES in settings.py is
+        # authoritative here and knows models the backend may not have listed
+        # yet. Sending cost explicitly is what keeps the dashboard and the
+        # terminal reporting the same number.
+        #
+        # `total` has to be sent. Langfuse derives the *token* total by summing
+        # the usage buckets but does **not** do the same for cost — omit it and
+        # every generation reports $0.00 with no error anywhere, which is a
+        # silent failure of the one number tracing was added for. Passing the
+        # meter's own `cost` makes the dashboard total and the terminal total
+        # the same value by construction rather than by coincidence.
+        costs = _cost_breakdown(model_id, usage)
+        gen.update(
+            output=resp.text,
+            usage_details=_usage_breakdown(usage),
+            cost_details={**costs, "total": cost} if costs else {},
+        )
+        return resp
 
 
 def _finish_reason(resp: types.GenerateContentResponse) -> str:
@@ -349,7 +434,7 @@ def call[ModelT: BaseModel](
             system_instruction=system,
             max_output_tokens=MAX_OUTPUT_TOKENS,
         )
-        resp = _generate_and_meter(model_id, user, config)
+        resp = _generate_and_meter(model_id, user, config, tier=tier)
         if resp.text is None:
             # `.text` is None whenever the response has no text part — most
             # often a safety block, or MAX_TOKENS reached while the model was
@@ -369,7 +454,7 @@ def call[ModelT: BaseModel](
     )
 
     # First attempt
-    resp = _generate_and_meter(model_id, user, config)
+    resp = _generate_and_meter(model_id, user, config, tier=tier, schema_name=schema.__name__)
     if isinstance(resp.parsed, schema):
         return resp.parsed
 
@@ -382,7 +467,9 @@ def call[ModelT: BaseModel](
         f"Raw output was:\n{resp.text}\n\n"
         f"Please return valid JSON matching the schema exactly."
     )
-    resp = _generate_and_meter(model_id, retry_user, config)
+    resp = _generate_and_meter(
+        model_id, retry_user, config, tier=tier, schema_name=f"{schema.__name__}:retry"
+    )
     if isinstance(resp.parsed, schema):
         return resp.parsed
 
