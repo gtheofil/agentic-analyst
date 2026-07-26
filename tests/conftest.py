@@ -8,6 +8,7 @@ import importlib
 import pkgutil
 from collections.abc import Iterator
 from contextlib import ExitStack
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -15,11 +16,13 @@ import pytest
 
 import agentic_analyst
 import agentic_analyst.llm as llm
+import evals
 from agentic_analyst.agents.planner import Plan
 from agentic_analyst.agents.researcher import NextStep, Record, Stop
 from agentic_analyst.memory.episodic import RunSummary
 from agentic_analyst.settings import SETTINGS
 from agentic_analyst.state import AgentState, Critique, Fix, Scores, Task
+from evals.judge import Judgement
 
 
 @pytest.fixture(autouse=True)
@@ -89,6 +92,24 @@ def isolate_memory(tmp_path: Any) -> Iterator[None]:
     episodic._get_collection.cache_clear()
 
 
+@pytest.fixture(autouse=True)
+def isolate_runs(tmp_path: Any) -> Iterator[Path]:
+    """Point the run registry at a throwaway directory for every test.
+
+    Same reasoning as `isolate_memory`: `runs/` used to be resolved relative to
+    the working directory, so a test could redirect it by chdir'ing. It is now
+    an absolute path under the repo root — which is what an API server needs,
+    since a server's working directory is nobody's business but its own — and
+    that makes a stray `execute_run` in a test write a real run into the
+    developer's own history. Autouse so no test has to remember.
+    """
+    import agentic_analyst.runner as runner
+
+    runs = tmp_path / "runs"
+    with patch.object(runner, "RUNS_DIR", runs):
+        yield runs
+
+
 @pytest.fixture
 def mock_client() -> Iterator[MagicMock]:
     """Swap the real Gemini client for a mock. No network, no API key.
@@ -110,24 +131,30 @@ def mock_client() -> Iterator[MagicMock]:
 
 
 def modules_importing_call() -> list[str]:
-    """Every module in the package that pulled `call` into its own namespace.
+    """Every module in the codebase that pulled `call` into its own namespace.
 
     Agents do `from ..llm import call`, which *copies* the reference. Patching
     `llm.call` therefore does nothing to them — the patch has to be applied at
     each module that holds a copy.
 
-    Discovering those modules by walking the package, rather than listing them
+    Discovering those modules by walking the packages, rather than listing them
     by hand, is the whole point. The hand-written list is exactly the bug in
     NOTES.md #6: adding a node that calls the model left a hole the fixture knew
     nothing about, and the "mocked" suite quietly started hitting the real API.
     A list has to be maintained; this cannot fall out of date, because a new
     module that imports `call` is found by the same walk that finds the old ones.
+
+    `evals` is walked alongside the package for exactly that reason. The judge
+    calls the model too, and it lives outside `src/` — which is precisely the
+    kind of "it is not an agent, the fixture does not apply to it" reasoning
+    that put a live API call in a mocked suite twice already.
     """
     found = []
-    for info in pkgutil.walk_packages(agentic_analyst.__path__, "agentic_analyst."):
-        module = importlib.import_module(info.name)
-        if getattr(module, "call", None) is llm.call:
-            found.append(info.name)
+    for package in (agentic_analyst, evals):
+        for info in pkgutil.walk_packages(package.__path__, f"{package.__name__}."):
+            module = importlib.import_module(info.name)
+            if getattr(module, "call", None) is llm.call:
+                found.append(info.name)
     return sorted(found)
 
 
@@ -216,6 +243,11 @@ class FakeLLM:
 
         if schema is Critique:
             return self.critiques.pop(0) if len(self.critiques) > 1 else self.critiques[0]
+
+        if schema is Judgement:
+            # The eval judge. Scores high enough to pass so a test asserting on
+            # the *harness* is not also asserting on a scripted verdict.
+            return Judgement(score=8, justification="Well evidenced throughout.")
 
         if schema is RunSummary:
             return RunSummary(

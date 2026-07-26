@@ -1,0 +1,21 @@
+id: ops-warehouse-automation
+domain: ops
+difficulty: medium
+smoke: true
+
+brief: >
+  A third-party logistics provider running three UK warehouses is evaluating
+  goods-to-person automation. Assess the payback case and the main risks.
+
+must_cover:
+  - Capital cost order-of-magnitude for a goods-to-person installation, cited
+  - The labour cost or availability pressure that motivates it
+  - A throughput or productivity uplift figure attributed to a named source
+  - Payback-period arithmetic that a reader can follow and check
+  - The contract-length risk specific to 3PLs, whose clients can leave before
+    the asset is paid off
+
+rationale: >
+  In the smoke set because it exercises the calculator tool and produces a
+  number the hard-check can see: a payback claim with no arithmetic behind it
+  is the failure mode this brief is here to catch.

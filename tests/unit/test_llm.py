@@ -181,6 +181,90 @@ def test_persistent_rate_limit_gives_a_human_error(
         call("fast", "sys", "user")
 
 
+def _daily_quota_exhausted() -> genai_errors.ClientError:
+    """The payload the API actually returns when the day's allowance is gone.
+
+    Copied from a real response, `retryDelay` included: a daily-quota 429 still
+    carries a plausible short wait, which is exactly what makes it look like a
+    burst.
+    """
+    return genai_errors.ClientError(
+        429,
+        {
+            "error": {
+                "code": 429,
+                "message": "You exceeded your current quota",
+                "details": [
+                    {
+                        "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+                        "violations": [
+                            {
+                                "quotaMetric": (
+                                    "generativelanguage.googleapis.com/"
+                                    "generate_content_free_tier_requests"
+                                ),
+                                "quotaId": ("GenerateRequestsPerDayPerProjectPerModel-FreeTier"),
+                                "quotaDimensions": {"model": "gemini-3.6-flash"},
+                                "quotaValue": "20",
+                            }
+                        ],
+                    },
+                    {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "35s"},
+                ],
+            }
+        },
+    )
+
+
+def test_a_daily_quota_is_not_retried(
+    mock_client: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ "Not now" and "not today" arrive as the same status code and must not
+    be treated the same.
+
+    Retrying a daily quota spends three minutes rediscovering a wall that does
+    not move until midnight Pacific — and logs "waiting 36s" while doing it, so
+    the operator concludes it is a burst and re-runs, spending three more.
+    """
+    monkeypatch.setattr("agentic_analyst.llm.time.sleep", lambda _s: None)
+    mock_client.models.generate_content.side_effect = _daily_quota_exhausted()
+
+    with pytest.raises(llm.LLMError, match="daily free-tier quota"):
+        call("fast", "sys", "user")
+
+    assert mock_client.models.generate_content.call_count == 1, "a daily quota was retried"
+
+
+def test_a_per_minute_quota_is_still_retried(
+    mock_client: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The distinction has to cut one way only — bursts are still worth waiting out."""
+    monkeypatch.setattr("agentic_analyst.llm.time.sleep", lambda _s: None)
+    per_minute = genai_errors.ClientError(
+        429,
+        {
+            "error": {
+                "code": 429,
+                "details": [
+                    {
+                        "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+                        "violations": [
+                            {"quotaId": "GenerateRequestsPerMinutePerProjectPerModel-FreeTier"}
+                        ],
+                    }
+                ],
+            }
+        },
+    )
+    mock_client.models.generate_content.side_effect = [
+        per_minute,
+        MagicMock(text="ok", usage_metadata=None),
+    ]
+
+    assert call("fast", "sys", "user") == "ok"
+    assert mock_client.models.generate_content.call_count == 2
+
+
 # ════════════════════════════════════════════════════════════════════
 # 3c. The throttle that stops us reaching a 429 in the first place
 # ════════════════════════════════════════════════════════════════════

@@ -1,0 +1,21 @@
+id: ops-office-energy
+domain: ops
+difficulty: easy
+smoke: false
+
+brief: >
+  Assess energy efficiency options for a 1990s UK office building of 8,000
+  square metres, and recommend where to spend a £500,000 retrofit budget.
+
+must_cover:
+  - Typical energy use intensity for UK offices, cited with units
+  - At least two distinct measures (fabric, plant, controls) with costs or
+    savings attached
+  - Regulatory driver — MEES/EPC minimum standards and their dates
+  - A prioritised allocation of the stated budget, not a menu
+
+rationale: >
+  The brief the system was developed against, kept in the set deliberately: it
+  is the one whose past runs are already in episodic memory, so a regression
+  here is a regression in the part of the system that has seen the most
+  attention.

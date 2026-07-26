@@ -1,0 +1,20 @@
+id: ops-four-day-week
+domain: ops
+difficulty: easy
+smoke: true
+
+brief: >
+  A 200-person engineering consultancy is considering a four-day week. Assess
+  the evidence on productivity and retention, and recommend whether to trial it.
+
+must_cover:
+  - Findings from a named four-day-week trial, with the sample and the period
+  - The utilisation/billing problem specific to a consultancy, where revenue is
+    billed hours
+  - Evidence on retention or recruitment effects
+  - A trial design concrete enough to run, with what would be measured
+
+rationale: >
+  The easy anchor of the set: abundant, well-documented public evidence, so a
+  low score here means the pipeline is broken rather than the brief being hard.
+  Every eval set needs one of these or a bad run and a hard brief look alike.

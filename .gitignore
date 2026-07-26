@@ -30,6 +30,11 @@ reports/*
 runs/
 *.log
 
+# CI's eval output. `evals/results/summary.md` *is* committed — it is the
+# results table the README quotes — but a per-PR sweep is an artifact, not a
+# result, and committing it would make every eval run a diff.
+evals/results/ci/
+
 # What the agent writes about itself (the Chroma store). Machine-generated and
 # machine-readable, and it embeds the content of past runs — config/prefs.yaml
 # is the human-authored half and *is* committed.

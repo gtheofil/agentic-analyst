@@ -29,8 +29,11 @@ jobs:
       - name: Format check (ruff format)
         run: uv run ruff format --check .
 
+      # `evals` and `scripts` live outside src/ but are shipped code, and the
+      # judge makes paid API calls. Leaving them unchecked is how the one module
+      # nobody type-checks becomes the one that fails at 3am in CI.
       - name: Type check (mypy)
-        run: uv run mypy src tests
+        run: uv run mypy src tests evals scripts
 
       - name: Test (pytest)
         run: uv run pytest

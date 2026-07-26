@@ -1,0 +1,26 @@
+id: retail-meal-kits
+domain: retail
+difficulty: medium
+smoke: true
+
+brief: >
+  A UK café chain with 40 sites is considering launching a meal-kit subscription
+  sold in-store and online. Should it? Two-page assessment with sources.
+
+# What a competent analyst could not leave out. These are the judge's coverage
+# rubric — deliberately about *substance*, not phrasing, because a bullet a
+# model can satisfy by repeating the brief's wording measures nothing.
+must_cover:
+  - UK meal-kit market size or growth rate, cited to a named source
+  - The churn/retention problem specific to meal-kit subscriptions
+  - What the existing 40 sites actually contribute (footfall, fulfilment, brand)
+    that a pure-play competitor lacks
+  - At least one named UK competitor and what happened to it
+  - A recommendation that commits either way, with the condition that would
+    change it
+
+# Why this brief is in the set, not a hint to the agent — it never sees this.
+rationale: >
+  The canonical shape of the job: a real decision, public evidence, and a market
+  where the well-known players have visibly struggled. Tests whether the agent
+  finds the retention problem, which is the thing that actually decides this.

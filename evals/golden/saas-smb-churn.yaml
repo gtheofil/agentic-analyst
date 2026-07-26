@@ -1,0 +1,21 @@
+id: saas-smb-churn
+domain: saas
+difficulty: medium
+smoke: false
+
+brief: >
+  A B2B SaaS product has 18% annual churn in its SMB tier and 6% in enterprise.
+  Assess whether investing in self-serve onboarding is the right response.
+
+must_cover:
+  - Benchmark SMB versus enterprise churn rates for B2B SaaS, cited
+  - Evidence linking onboarding or time-to-value to retention
+  - At least one alternative explanation for the gap (segment fit, price
+    sensitivity, sales-assisted vs self-serve acquisition)
+  - What would have to be measured to distinguish the explanations
+  - A recommendation conditional on that measurement
+
+rationale: >
+  The brief contains an implied diagnosis ("onboarding is the problem") that the
+  numbers do not support on their own. Tests whether the agent audits the
+  premise it was handed or optimises inside it.
