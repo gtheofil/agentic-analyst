@@ -19,6 +19,9 @@ on:
         type: boolean
         default: false
 
+permissions:
+  contents: read
+
 # A new push supersedes the previous eval run. Without this, three pushes in ten
 # minutes pay for three sweeps and only the last one is read.
 concurrency:

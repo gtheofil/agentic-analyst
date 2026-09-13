@@ -28,6 +28,12 @@ api = FastAPI(
     title="agentic-analyst",
     version="0.1.0",
     summary="Turn a business brief into a cited research report.",
+    description=(
+        "Experimental API. Not intended for unauthenticated public exposure. "
+        "It accepts arbitrary brief text, launches external research and LLM work, "
+        "and can incur real cost and network access unless protected by "
+        "authentication, rate limiting, quotas, and network isolation."
+    ),
 )
 
 
